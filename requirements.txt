@@ -1,0 +1,5 @@
+flask
+telethon
+deep-translator
+Pillow
+gunicorn
