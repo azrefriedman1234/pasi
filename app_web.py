@@ -25,8 +25,10 @@ from telethon.errors import (
     PhoneCodeInvalidError,
     PhoneCodeExpiredError,
 )
+
 from deep_translator import GoogleTranslator
 from PIL import Image, ImageFilter, ImageDraw, ImageFont
+
 
 # -------------------------------------------------------------------
 # הגדרות בסיס
@@ -50,12 +52,13 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
+
 # -------------------------------------------------------------------
 # גלובלים
 # -------------------------------------------------------------------
 
 app = Flask(__name__)
-app.secret_key = "pasiflonet-secret-key"
+app.secret_key = "pasiflonet-secret-key"  # תחליף למשהו סודי באמת בפרודקשן
 
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
@@ -144,17 +147,20 @@ def trim_old_messages() -> None:
     for msg in to_delete:
         for key in ("media_path", "media_original", "media_preview"):
             path = msg.get(key)
-            if path:
-                if not os.path.isabs(path):
-                    full = os.path.join(DATA_DIR, path)
-                else:
-                    full = path
-                try:
-                    if os.path.exists(full):
-                        os.remove(full)
-                        logging.info(f"Deleted old media file: {full}")
-                except Exception as e:
-                    logging.error(f"Failed deleting media {full}: {e}")
+            if not path:
+                continue
+
+            if not os.path.isabs(path):
+                full = os.path.join(DATA_DIR, path)
+            else:
+                full = path
+
+            try:
+                if os.path.exists(full):
+                    os.remove(full)
+                    logging.info(f"Deleted old media file: {full}")
+            except Exception as e:
+                logging.error(f"Failed deleting media {full}: {e}")
 
     MESSAGES = keep
     save_messages()
@@ -213,7 +219,7 @@ async def ensure_tg_client():
         StringSession(session_str),
         api_id_int,
         api_hash,
-        loop=loop
+        loop=loop,
     )
     await client.connect()
     if not await client.is_user_authorized():
@@ -412,7 +418,7 @@ def process_video_blur_and_watermark(
 
 
 # -------------------------------------------------------------------
-# פלאסקים – ראוטים
+# פלאסקים – ראוטים בסיסיים
 # -------------------------------------------------------------------
 
 @app.route("/")
@@ -438,6 +444,184 @@ def messages_list():
         settings=settings,
         MAX_MESSAGES=MAX_MESSAGES,
     )
+
+
+@app.route("/messages/<int:msg_id>", methods=["GET", "POST"])
+def message_detail(msg_id):
+    msg = next((m for m in MESSAGES if m["message_id"] == msg_id), None)
+    if not msg:
+        flash("הודעה לא נמצאה", "danger")
+        return redirect(url_for("messages_list"))
+
+    if request.method == "POST":
+        send_to_telegram = bool(request.form.get("send_tg"))
+        send_to_facebook = bool(request.form.get("send_fb"))
+        translate_to_he = bool(request.form.get("translate_he"))
+        blur_media = bool(request.form.get("blur_media"))
+        add_watermark = bool(request.form.get("add_watermark"))
+
+        text_to_send = request.form.get("text", "") or ""
+        signature = settings.get("signature_text", "")
+        if signature:
+            text_to_send = f"{text_to_send}\n{signature}".strip()
+
+        if translate_to_he and text_to_send:
+            try:
+                translated = GoogleTranslator(source="auto", target="iw").translate(text_to_send)
+                text_to_send = translated
+            except Exception as e:
+                logging.error(f"Translation failed: {e}")
+                flash(f"שגיאה בתרגום: {e}", "danger")
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(ensure_tg_client(), loop)
+            future.result(timeout=30)
+        except Exception as e:
+            logging.error(f"Telegram init error: {e}")
+            flash(str(e), "danger")
+            return redirect(url_for("message_detail", msg_id=msg_id))
+
+        async def do_send():
+            global tg_client
+            target = settings.get("default_channel", "me")
+            media_path = msg.get("media_path")
+            media_type = msg.get("media_type")
+
+            final_media_path = media_path
+
+            blur_rect = None
+            wm_rect = None
+
+            try:
+                bx = int(request.form.get("blur_x") or 0)
+                by = int(request.form.get("blur_y") or 0)
+                bw = int(request.form.get("blur_w") or 0)
+                bh = int(request.form.get("blur_h") or 0)
+                if bw > 0 and bh > 0:
+                    blur_rect = (bx, by, bw, bh)
+            except ValueError:
+                blur_rect = None
+
+            try:
+                wx = int(request.form.get("wm_x") or 0)
+                wy = int(request.form.get("wm_y") or 0)
+                ws = int(request.form.get("wm_size") or 0)
+                if ws > 0:
+                    wm_rect = (wx, wy, ws)
+            except ValueError:
+                wm_rect = None
+
+            if media_path and (blur_media or add_watermark):
+                if media_type == "תמונה":
+                    final_media_path = process_image_blur_and_watermark(
+                        media_path,
+                        blur=blur_media,
+                        add_wm=add_watermark,
+                        blur_rect=blur_rect,
+                        wm_rect=wm_rect,
+                    )
+                elif media_type == "וידאו":
+                    final_media_path = process_video_blur_and_watermark(
+                        media_path,
+                        blur=blur_media,
+                        add_wm=add_watermark,
+                        blur_rect=blur_rect,
+                        wm_rect=wm_rect,
+                    )
+
+            if send_to_telegram:
+                if final_media_path and media_type in ("תמונה", "וידאו", "קובץ"):
+                    await tg_client.send_file(
+                        target,
+                        final_media_path,
+                        caption=text_to_send,
+                    )
+                else:
+                    await tg_client.send_message(target, text_to_send)
+
+            if send_to_facebook:
+                # כאן תוסיף אינטגרציה לפייסבוק אם תרצה
+                pass
+
+        asyncio.run_coroutine_threadsafe(do_send(), loop)
+        flash("בקשת השליחה נשלחה ✔", "success")
+        return redirect(url_for("messages_list"))
+
+    # GET – תצוגת פרטי הודעה + קנבס
+    previews = {}
+    if msg.get("has_media"):
+        mp = msg.get("media_path")
+        if mp:
+            # ההנחה: media_path שמור כנתיב מלא תחת DATA_DIR
+            rel = os.path.relpath(mp, DATA_DIR)
+            previews["original"] = url_for("media", filename=rel)
+
+    return render_template(
+        "message_detail.html",
+        message=msg,
+        settings=settings,
+        previews=previews,
+    )
+
+
+@app.route("/new", methods=["GET", "POST"])
+def new_message():
+    if request.method == "POST":
+        text = request.form.get("text", "")
+        translate_to_he = bool(request.form.get("translate_he"))
+        send_to_telegram = bool(request.form.get("send_tg"))
+        send_to_facebook = bool(request.form.get("send_fb"))
+
+        if translate_to_he and text:
+            try:
+                text = GoogleTranslator(source="auto", target="iw").translate(text)
+            except Exception as e:
+                logging.error(f"Translation failed: {e}")
+                flash(f"שגיאה בתרגום: {e}", "danger")
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(ensure_tg_client(), loop)
+            future.result(timeout=30)
+        except Exception as e:
+            logging.error(f"Telegram init error: {e}")
+            flash(str(e), "danger")
+            return redirect(url_for("new_message"))
+
+        async def do_send_new():
+            global tg_client
+            target = settings.get("default_channel", "me")
+            if send_to_telegram:
+                await tg_client.send_message(target, text)
+            if send_to_facebook:
+                # כאן אפשר להוסיף אינטגרציה לפייסבוק
+                pass
+
+        asyncio.run_coroutine_threadsafe(do_send_new(), loop)
+
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        new_id = (max((m["message_id"] for m in MESSAGES), default=0) + 1)
+        MESSAGES.append({
+            "message_id": new_id,
+            "text": text,
+            "sender": "אתה",
+            "date": now,
+            "timestamp": now,
+            "has_media": False,
+            "media_type": "",
+            "media_path": "",
+        })
+        save_messages()
+        trim_old_messages()
+
+        flash("ההודעה נשלחה ונשמרה ✔", "success")
+        return redirect(url_for("messages_list"))
+
+    return render_template("new.html", settings=settings)
+
+
+# -------------------------------------------------------------------
+# הגדרות + התחברות לטלגרם
+# -------------------------------------------------------------------
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings_page():
@@ -557,7 +741,6 @@ def settings_page():
             try:
                 future = asyncio.run_coroutine_threadsafe(do_login(), loop)
                 try:
-                    # אפשר להגדיל קצת את ה־timeout אם תרצה
                     future.result(timeout=40)
                     flash("ההתחברות לטלגרם נשמרה ✔ – אין צורך להתחבר שוב", "success")
                 except FuturesTimeoutError:
@@ -572,270 +755,6 @@ def settings_page():
     # GET
     return render_template("settings.html", settings=settings)
 
-
-        async def do_send():
-            global tg_client
-            target = settings.get("default_channel", "me")
-            media_path = msg.get("media_path")
-            media_type = msg.get("media_type")
-
-            final_media_path = media_path
-
-            blur_rect = None
-            wm_rect = None
-
-            try:
-                bx = int(request.form.get("blur_x") or 0)
-                by = int(request.form.get("blur_y") or 0)
-                bw = int(request.form.get("blur_w") or 0)
-                bh = int(request.form.get("blur_h") or 0)
-                if bw > 0 and bh > 0:
-                    blur_rect = (bx, by, bw, bh)
-            except ValueError:
-                blur_rect = None
-
-            try:
-                wx = int(request.form.get("wm_x") or 0)
-                wy = int(request.form.get("wm_y") or 0)
-                ws = int(request.form.get("wm_size") or 0)
-                if ws > 0:
-                    wm_rect = (wx, wy, ws)
-            except ValueError:
-                wm_rect = None
-
-            if media_path and (blur_media or add_watermark):
-                if media_type == "תמונה":
-                    final_media_path = process_image_blur_and_watermark(
-                        media_path,
-                        blur=blur_media,
-                        add_wm=add_watermark,
-                        blur_rect=blur_rect,
-                        wm_rect=wm_rect,
-                    )
-                elif media_type == "וידאו":
-                    final_media_path = process_video_blur_and_watermark(
-                        media_path,
-                        blur=blur_media,
-                        add_wm=add_watermark,
-                        blur_rect=blur_rect,
-                        wm_rect=wm_rect,
-                    )
-
-            if send_to_telegram:
-                if final_media_path and media_type in ("תמונה", "וידאו", "קובץ"):
-                    await tg_client.send_file(
-                        target,
-                        final_media_path,
-                        caption=text_to_send,
-                    )
-                else:
-                    await tg_client.send_message(target, text_to_send)
-
-            if send_to_facebook:
-                # כאן תוסיף את הפונקציות שלך לפייסבוק אם תרצה
-                pass
-
-        asyncio.run_coroutine_threadsafe(do_send(), loop)
-        flash("בקשת השליחה נשלחה ✔", "success")
-        return redirect(url_for("messages_list"))
-
-    # GET – תצוגת פרטי הודעה + קנבס
-    previews = {}
-    if msg.get("has_media"):
-        mp = msg.get("media_path")
-        if mp:
-            rel = os.path.relpath(mp, DATA_DIR)
-            previews["original"] = url_for("media", filename=rel)
-
-    return render_template(
-        "message_detail.html",
-        message=msg,
-        settings=settings,
-        previews=previews,
-    )
-
-
-@app.route("/new", methods=["GET", "POST"])
-def new_message():
-    if request.method == "POST":
-        text = request.form.get("text", "")
-        translate_to_he = bool(request.form.get("translate_he"))
-        send_to_telegram = bool(request.form.get("send_tg"))
-        send_to_facebook = bool(request.form.get("send_fb"))
-
-        if translate_to_he and text:
-            try:
-                text = GoogleTranslator(source="auto", target="iw").translate(text)
-            except Exception as e:
-                logging.error(f"Translation failed: {e}")
-                flash(f"שגיאה בתרגום: {e}", "danger")
-
-        try:
-            future = asyncio.run_coroutine_threadsafe(ensure_tg_client(), loop)
-            future.result(timeout=30)
-        except Exception as e:
-            logging.error(f"Telegram init error: {e}")
-            flash(str(e), "danger")
-            return redirect(url_for("new_message"))
-
-        async def do_send_new():
-            global tg_client
-            target = settings.get("default_channel", "me")
-            if send_to_telegram:
-                await tg_client.send_message(target, text)
-            if send_to_facebook:
-                # כאן אפשר להוסיף אינטגרציה לפייסבוק
-                pass
-
-        asyncio.run_coroutine_threadsafe(do_send_new(), loop)
-
-        now = datetime.utcnow().isoformat(timespec="seconds")
-        new_id = (max((m["message_id"] for m in MESSAGES), default=0) + 1)
-        MESSAGES.append({
-            "message_id": new_id,
-            "text": text,
-            "sender": "אתה",
-            "date": now,
-            "timestamp": now,
-            "has_media": False,
-            "media_type": "",
-            "media_path": "",
-        })
-        save_messages()
-        trim_old_messages()
-
-        flash("ההודעה נשלחה ונשמרה ✔", "success")
-        return redirect(url_for("messages_list"))
-
-    return render_template("new.html", settings=settings)
-
-
-@app.route("/settings", methods=["GET", "POST"])
-def settings_page():
-    global settings, login_client
-
-    if request.method == "POST":
-        api_id = request.form.get("api_id", "").strip()
-        api_hash = request.form.get("api_hash", "").strip()
-        phone = request.form.get("phone", "").strip()
-        default_channel = request.form.get("default_channel", "me").strip()
-        signature_text = request.form.get("signature_text", "")
-        fb_token = request.form.get("facebook_page_access_token", "").strip()
-        fb_page_id = request.form.get("facebook_page_id", "").strip()
-
-        wm_file = request.files.get("watermark_image")
-        if wm_file and wm_file.filename:
-            try:
-                im = Image.open(wm_file.stream).convert("RGBA")
-                out_name = "watermark.png"
-                out_path = os.path.join(APP_DATA_DIR, out_name)
-                os.makedirs(APP_DATA_DIR, exist_ok=True)
-                im.save(out_path, "PNG")
-                settings["watermark_image"] = out_name
-                logging.info(f"Watermark image saved to {out_path}")
-            except Exception as e:
-                logging.error(f"Failed to save watermark image: {e}")
-                flash(f"שגיאה בשמירת סימן מים: {e}", "danger")
-
-        settings["api_id"] = api_id
-        settings["api_hash"] = api_hash
-        settings["phone"] = phone
-        settings["default_channel"] = default_channel
-        settings["signature_text"] = signature_text
-        settings["facebook_page_access_token"] = fb_token
-        settings["facebook_page_id"] = fb_page_id
-
-        save_settings(settings)
-        flash("ההגדרות נשמרו ✔", "success")
-
-        login_step = request.form.get("login_step")
-
-        if login_step == "send_code":
-
-            async def send_code():
-                global login_client
-                if not api_id or not api_hash or not phone:
-                    raise RuntimeError("חייבים למלא API ID, API Hash ומספר טלפון")
-
-                try:
-                    api_id_int = int(api_id)
-                except ValueError:
-                    raise RuntimeError("API ID חייב להיות מספר")
-
-                if login_client is not None:
-                    try:
-                        await login_client.disconnect()
-                    except Exception:
-                        pass
-                    login_client = None
-
-                client = TelegramClient(StringSession(""), api_id_int, api_hash, loop=loop)
-                await client.connect()
-                await client.send_code_request(phone)
-                login_client = client
-
-            try:
-                future = asyncio.run_coroutine_threadsafe(send_code(), loop)
-                future.result(timeout=30)
-                flash("קוד נשלח לטלגרם ✔ – עכשיו הקלד את הקוד ולחץ 'אישור התחברות'", "success")
-            except Exception as e:
-                logging.error(f"Send code error: {e}", exc_info=True)
-                flash(f"שגיאה בשליחת קוד: {e}", "danger")
-
-        elif login_step == "confirm_code":
-            code = request.form.get("code", "").strip()
-            password = request.form.get("password", "").strip() or None
-
-            async def do_login():
-                global login_client, settings
-
-                if login_client is None:
-                    raise RuntimeError("לא נשלח קוד או שהחיבור פג – לחץ שוב 'שליחת קוד'")
-
-                try:
-                    await login_client.sign_in(
-                        phone=phone or settings.get("phone", ""),
-                        code=code,
-                        password=password,
-                    )
-                except SessionPasswordNeededError:
-                    raise RuntimeError("דרושה סיסמת 2FA – מלא ונסה שוב")
-                except PhoneCodeInvalidError:
-                    raise RuntimeError("קוד אימות שגוי – ודא שאתה מקליד את הקוד האחרון שהגיע")
-                except PhoneCodeExpiredError:
-                    try:
-                        await login_client.disconnect()
-                    except Exception:
-                        pass
-                    login_client = None
-                    raise RuntimeError("קוד האימות פג תוקף – לחץ שוב 'שליחת קוד' והשתמש בקוד החדש שמגיע")
-
-                session_str = login_client.session.save()
-                settings["session"] = session_str
-                save_settings(settings)
-
-                try:
-                    await login_client.disconnect()
-                except Exception:
-                    pass
-                login_client = None
-
-            try:
-                future = asyncio.run_coroutine_threadsafe(do_login(), loop)
-                future.result(timeout=30)
-                flash("ההתחברות לטלגרם נשמרה ✔ – אין צורך להתחבר שוב", "success")
-            except Exception as e:
-                logging.error(f"Login error: {e}", exc_info=True)
-                flash(str(e), "danger")
-
-        return redirect(url_for("settings_page"))
-
-    return render_template("settings.html", settings=settings)
-
-
-# -------------------------------------------------------------------
-# הפעלת האפליקציה
-# -------------------------------------------------------------------
 
 # -------------------------------------------------------------------
 # אבטחה בסיסית – התחברות עם סיסמת מנהל
@@ -852,12 +771,14 @@ def require_login():
     מותר גישה חופשית רק ל:
     - /login
     - /static (קבצי css/js)
+    - /favicon.ico
     """
     # בקשות סטטיות /favicon וכו'
     if request.path.startswith("/static"):
         return
+    if request.path == "/favicon.ico":
+        return
 
-    # endpoint יכול להיות None לפעמים
     endpoint = request.endpoint or ""
 
     # מסך התחברות פתוח לכולם
@@ -918,6 +839,11 @@ def logout():
     session.pop("logged_in", None)
     flash("התנתקת בהצלחה", "success")
     return redirect(url_for("login"))
+
+
+# -------------------------------------------------------------------
+# הפעלת האפליקציה
+# -------------------------------------------------------------------
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
