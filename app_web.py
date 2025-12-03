@@ -5,6 +5,7 @@ import asyncio
 import subprocess
 from datetime import datetime
 from typing import Optional, List, Dict
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from flask import (
     Flask,
