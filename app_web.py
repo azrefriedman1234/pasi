@@ -84,6 +84,7 @@ def load_settings() -> Dict:
             "facebook_page_id": "",
             "watermark_image": "",
             "session": "",
+            "admin_password": "",
         }
         save_settings(data)
         return data
@@ -736,6 +737,88 @@ def settings_page():
 # -------------------------------------------------------------------
 # הפעלת האפליקציה
 # -------------------------------------------------------------------
+
+# -------------------------------------------------------------------
+# אבטחה בסיסית – התחברות עם סיסמת מנהל
+# -------------------------------------------------------------------
+
+def is_logged_in() -> bool:
+    return session.get("logged_in") is True
+
+
+@app.before_request
+def require_login():
+    """
+    לפני כל בקשה – לבדוק אם המשתמש מחובר.
+    מותר גישה חופשית רק ל:
+    - /login
+    - /static (קבצי css/js)
+    """
+    # בקשות סטטיות /favicon וכו'
+    if request.path.startswith("/static"):
+        return
+
+    # endpoint יכול להיות None לפעמים
+    endpoint = request.endpoint or ""
+
+    # מסך התחברות פתוח לכולם
+    if endpoint == "login":
+        return
+
+    # אם לא מחובר – תמיד להפנות ל-login
+    if not is_logged_in():
+        return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    """
+    מסך התחברות:
+    - אם admin_password עדיין ריק -> הסיסמה שתוזן בפעם הראשונה תהפוך לסיסמת המנהל.
+    - אחרת צריך להזין את הסיסמה הקיימת.
+    """
+    global settings
+
+    # אם כבר מחובר – לשלוח ישר לרשימת ההודעות
+    if is_logged_in():
+        return redirect(url_for("messages_list"))
+
+    if request.method == "POST":
+        password = (request.form.get("password") or "").strip()
+
+        # פעם ראשונה – אין סיסמת מנהל עדיין
+        if not settings.get("admin_password"):
+            if not password:
+                flash("צריך להגדיר סיסמה כלשהי כדי להמשיך", "danger")
+                return redirect(url_for("login"))
+
+            settings["admin_password"] = password
+            save_settings(settings)
+            session["logged_in"] = True
+            flash("סיסמת מנהל הוגדרה והתחברת בהצלחה ✔", "success")
+            return redirect(url_for("messages_list"))
+
+        # יש כבר סיסמה – צריך להתאים
+        if password == settings.get("admin_password"):
+            session["logged_in"] = True
+            flash("התחברת בהצלחה ✔", "success")
+            return redirect(url_for("messages_list"))
+        else:
+            flash("סיסמה לא נכונה", "danger")
+            return redirect(url_for("login"))
+
+    # GET
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    """
+    יציאה – מחיקת session התחברות.
+    """
+    session.pop("logged_in", None)
+    flash("התנתקת בהצלחה", "success")
+    return redirect(url_for("login"))
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
