@@ -142,7 +142,6 @@ def trim_old_messages() -> None:
         for key in ("media_path", "media_original", "media_preview"):
             path = msg.get(key)
             if path:
-                # חלק מהנתיבים נשמרים כיחסיים מתוך MEDIA/TEMP
                 if not os.path.isabs(path):
                     full = os.path.join(DATA_DIR, path)
                 else:
@@ -244,6 +243,7 @@ def process_image_blur_and_watermark(
 
     w, h = im.size
 
+    # טשטוש רק אם יש מלבן מוגדר – אין fallback לטשטוש מלא
     if blur and blur_rect:
         try:
             bx, by, bw, bh = blur_rect
@@ -424,13 +424,17 @@ def media(filename):
 
 @app.route("/messages")
 def messages_list():
-    # לסדר לפי תאריך יורד
     sorted_msgs = sorted(
         MESSAGES,
         key=lambda m: m.get("timestamp", ""),
         reverse=True,
     )
-    return render_template("messages.html", messages=sorted_msgs, settings=settings)
+    return render_template(
+        "messages.html",
+        messages=sorted_msgs,
+        settings=settings,
+        MAX_MESSAGES=MAX_MESSAGES,
+    )
 
 
 @app.route("/messages/<int:msg_id>", methods=["GET", "POST"])
@@ -527,13 +531,14 @@ def message_detail(msg_id):
                     await tg_client.send_message(target, text_to_send)
 
             if send_to_facebook:
-                # כאן אפשר להוסיף אינטגרציה לפייסבוק כמו בקוד שלך
+                # כאן תוסיף את הפונקציות שלך לפייסבוק אם תרצה
                 pass
 
         asyncio.run_coroutine_threadsafe(do_send(), loop)
         flash("בקשת השליחה נשלחה ✔", "success")
         return redirect(url_for("messages_list"))
 
+    # GET – תצוגת פרטי הודעה + קנבס
     previews = {}
     if msg.get("has_media"):
         mp = msg.get("media_path")
