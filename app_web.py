@@ -439,41 +439,139 @@ def messages_list():
         MAX_MESSAGES=MAX_MESSAGES,
     )
 
-
-@app.route("/messages/<int:msg_id>", methods=["GET", "POST"])
-def message_detail(msg_id):
-    msg = next((m for m in MESSAGES if m["message_id"] == msg_id), None)
-    if not msg:
-        flash("הודעה לא נמצאה", "danger")
-        return redirect(url_for("messages_list"))
+@app.route("/settings", methods=["GET", "POST"])
+def settings_page():
+    global settings, login_client
 
     if request.method == "POST":
-        send_to_telegram = bool(request.form.get("send_tg"))
-        send_to_facebook = bool(request.form.get("send_fb"))
-        translate_to_he = bool(request.form.get("translate_he"))
-        blur_media = bool(request.form.get("blur_media"))
-        add_watermark = bool(request.form.get("add_watermark"))
+        api_id = request.form.get("api_id", "").strip()
+        api_hash = request.form.get("api_hash", "").strip()
+        phone = request.form.get("phone", "").strip()
+        default_channel = request.form.get("default_channel", "me").strip()
+        signature_text = request.form.get("signature_text", "")
+        fb_token = request.form.get("facebook_page_access_token", "").strip()
+        fb_page_id = request.form.get("facebook_page_id", "").strip()
 
-        text_to_send = request.form.get("text", "") or ""
-        signature = settings.get("signature_text", "")
-        if signature:
-            text_to_send = f"{text_to_send}\n{signature}".strip()
-
-        if translate_to_he and text_to_send:
+        wm_file = request.files.get("watermark_image")
+        if wm_file and wm_file.filename:
             try:
-                translated = GoogleTranslator(source="auto", target="iw").translate(text_to_send)
-                text_to_send = translated
+                im = Image.open(wm_file.stream).convert("RGBA")
+                out_name = "watermark.png"
+                out_path = os.path.join(APP_DATA_DIR, out_name)
+                os.makedirs(APP_DATA_DIR, exist_ok=True)
+                im.save(out_path, "PNG")
+                settings["watermark_image"] = out_name
+                logging.info(f"Watermark image saved to {out_path}")
             except Exception as e:
-                logging.error(f"Translation failed: {e}")
-                flash(f"שגיאה בתרגום: {e}", "danger")
+                logging.error(f"Failed to save watermark image: {e}")
+                flash(f"שגיאה בשמירת סימן מים: {e}", "danger")
 
-        try:
-            future = asyncio.run_coroutine_threadsafe(ensure_tg_client(), loop)
-            future.result(timeout=30)
-        except Exception as e:
-            logging.error(f"Telegram init error: {e}")
-            flash(str(e), "danger")
-            return redirect(url_for("message_detail", msg_id=msg_id))
+        settings["api_id"] = api_id
+        settings["api_hash"] = api_hash
+        settings["phone"] = phone
+        settings["default_channel"] = default_channel
+        settings["signature_text"] = signature_text
+        settings["facebook_page_access_token"] = fb_token
+        settings["facebook_page_id"] = fb_page_id
+
+        save_settings(settings)
+        flash("ההגדרות נשמרו ✔", "success")
+
+        login_step = request.form.get("login_step")
+
+        # ---------- שלב 1: שליחת קוד לטלגרם ----------
+        if login_step == "send_code":
+
+            async def send_code_async():
+                global login_client
+                if not api_id or not api_hash or not phone:
+                    raise RuntimeError("חייבים למלא API ID, API Hash ומספר טלפון")
+
+                try:
+                    api_id_int = int(api_id)
+                except ValueError:
+                    raise RuntimeError("API ID חייב להיות מספר")
+
+                # ננקה לקוח התחברות קודם אם יש
+                if login_client is not None:
+                    try:
+                        await login_client.disconnect()
+                    except Exception:
+                        pass
+                    login_client = None
+
+                client = TelegramClient(StringSession(""), api_id_int, api_hash, loop=loop)
+                await client.connect()
+                await client.send_code_request(phone)
+                login_client = client
+                logging.info("Telegram code sent successfully (login_client ready)")
+
+            try:
+                # לא מחכים פה לתוצאה – מריצים ברקע
+                asyncio.run_coroutine_threadsafe(send_code_async(), loop)
+                flash("אם הכל תקין – קוד אמור להגיע לטלגרם תוך כמה שניות ✔", "success")
+            except Exception as e:
+                logging.error(f"Send code error: {e}", exc_info=True)
+                flash(f"שגיאה בשליחת קוד: {e}", "danger")
+
+        # ---------- שלב 2: אישור התחברות עם קוד ----------
+        elif login_step == "confirm_code":
+            code = request.form.get("code", "").strip()
+            password = request.form.get("password", "").strip() or None
+
+            async def do_login():
+                global login_client, settings
+
+                if login_client is None:
+                    raise RuntimeError("לא נשלח קוד או שהחיבור פג – לחץ שוב 'שליחת קוד'")
+
+                try:
+                    await login_client.sign_in(
+                        phone=phone or settings.get("phone", ""),
+                        code=code,
+                        password=password,
+                    )
+                except SessionPasswordNeededError:
+                    raise RuntimeError("דרושה סיסמת 2FA – מלא ונסה שוב")
+                except PhoneCodeInvalidError:
+                    raise RuntimeError("קוד אימות שגוי – ודא שאתה מקליד את הקוד האחרון שהגיע")
+                except PhoneCodeExpiredError:
+                    try:
+                        await login_client.disconnect()
+                    except Exception:
+                        pass
+                    login_client = None
+                    raise RuntimeError("קוד האימות פג תוקף – לחץ שוב 'שליחת קוד' והשתמש בקוד החדש שמגיע")
+
+                # אם הצליח:
+                session_str = login_client.session.save()
+                settings["session"] = session_str
+                save_settings(settings)
+
+                try:
+                    await login_client.disconnect()
+                except Exception:
+                    pass
+                login_client = None
+
+            try:
+                future = asyncio.run_coroutine_threadsafe(do_login(), loop)
+                try:
+                    # אפשר להגדיל קצת את ה־timeout אם תרצה
+                    future.result(timeout=40)
+                    flash("ההתחברות לטלגרם נשמרה ✔ – אין צורך להתחבר שוב", "success")
+                except FuturesTimeoutError:
+                    logging.error("Login timeout (Telegram might be slow or blocked)")
+                    flash("פסק זמן בהתחברות לטלגרם – ייתכן שהשרת של טלגרם חסום/איטי מרנדר. נסה שוב.", "danger")
+            except Exception as e:
+                logging.error(f"Login error: {e}", exc_info=True)
+                flash(str(e), "danger")
+
+        return redirect(url_for("settings_page"))
+
+    # GET
+    return render_template("settings.html", settings=settings)
+
 
         async def do_send():
             global tg_client
