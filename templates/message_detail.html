@@ -1,65 +1,117 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="card">
-  <div class="card-header">
-    <div class="card-title">פרטי הודעה</div>
-    <div class="card-subtitle">
-      #{{ message.message_id }} · {{ message.sender }} · {{ message.date }}
-    </div>
+<div class="card p-3">
+  <div class="page-title">פרטי הודעה</div>
+  <div class="subtitle">
+    הודעה #{{ message.message_id }} · {{ message.sender or "לא ידוע" }} · {{ message.date }}
   </div>
-  <div class="card-body">
-    <div class="msg-full-text">{{ message.text }}</div>
 
-    {% if message.has_media and previews.original %}
-      <div class="media-preview">
-        {% if message.media_type == "תמונה" %}
-          <img src="{{ previews.original }}" class="media-img">
-        {% elif message.media_type == "וידאו" %}
-          <video class="media-video" controls>
-            <source src="{{ previews.original }}" type="video/mp4">
-          </video>
-        {% endif %}
+  <p class="mb-1">
+    <strong>מדיה:</strong>
+    {{ message.media_type }}
+    {% if message.has_media %}
+      <span class="badge badge-media ms-1">יש מדיה</span>
+    {% endif %}
+  </p>
+
+  {% if message.has_media and previews %}
+    <hr class="my-2">
+
+    <div class="mb-2 small text-muted">
+      לתמונות ולוידיאו: אפשר לקבוע ידנית אזור טשטוש ומיקום סימן המים (לוגו) עם חיצים/טאצ'.
+      בוידיאו הטשטוש והלוגו יחולו על אותו אזור בכל הפריימים.
+    </div>
+
+    {% if message.media_type == "תמונה" %}
+      <div class="mb-3">
+        <div class="w-100" style="max-height: 320px; overflow: hidden;">
+          <canvas id="editCanvas"
+                  data-image-url="{{ previews.original or previews.processed }}"
+                  style="width: 100%; border: 1px solid #39ff14; border-radius: 12px; background: #050b06;"></canvas>
+        </div>
+      </div>
+    {% elif message.media_type == "וידאו" %}
+      <div class="mb-3">
+        <video id="editVideo"
+               class="w-100 rounded border border-success mb-2"
+               controls>
+          <source src="{{ previews.original or previews.processed }}" type="video/mp4">
+        </video>
+
+        <div class="w-100" style="max-height: 320px; overflow: hidden;">
+          <canvas id="editCanvas"
+                  data-video="1"
+                  style="width: 100%; border: 1px solid #39ff14; border-radius: 12px; background: #050b06;"></canvas>
+        </div>
+        <div class="mt-1 small text-muted">
+          הקנבס משתמש בפריים מהוידיאו להגדרת האזור – הטשטוש בפועל יוחל על כל הפריימים באותו מקום.
+        </div>
       </div>
     {% endif %}
 
-    <hr class="divider">
-
-    <form method="post" id="detailForm">
-      <div class="form-group">
-        <label class="form-label">טקסט לעריכה / שליחה</label>
-        <textarea name="text" class="form-input" rows="4">{{ message.text }}</textarea>
-      </div>
-
-      <label class="form-check">
-        <input type="checkbox" name="translate_he">
-        <span>תרגום אוטומטי לעברית</span>
-      </label>
-
-      {% if message.has_media %}
-        <div class="form-group mt-2">
-          <label class="form-check">
-            <input type="checkbox" name="blur_media" checked>
-            <span>טשטוש המדיה</span>
-          </label>
-          <label class="form-check">
-            <input type="checkbox" name="add_watermark" checked>
-            <span>הוסף סימן מים (לוגו)</span>
-          </label>
+    {% if message.media_type == "תמונה" or message.media_type == "וידאו" %}
+      <div class="mt-2">
+        <div class="fw-bold mb-1">שליטה בטשטוש</div>
+        <div class="d-flex flex-wrap gap-1 mb-2">
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurUp">↑ טשטוש</button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurDown">↓ טשטוש</button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurLeft">← טשטוש</button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurRight">טשטוש →</button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurBigger">טשטוש גדול יותר +</button>
+          <button type="button" class="btn btn-outline-light btn-sm" id="blurSmaller">טשטוש קטן יותר −</button>
         </div>
-      {% endif %}
 
-      <div class="form-group mt-2">
-        <label class="form-check">
-          <input type="checkbox" name="send_tg" checked>
-          <span>שלח לטלגרם</span>
-        </label>
-        <label class="form-check">
-          <input type="checkbox" name="send_fb">
-          <span>שלח גם לפייסבוק</span>
+        <div class="fw-bold mb-1">שליטה בסימן מים (לוגו)</div>
+        <div class="d-flex flex-wrap gap-1 mb-1">
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmUp">↑ לוגו</button>
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmDown">↓ לוגו</button>
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmLeft">← לוגו</button>
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmRight">לוגו →</button>
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmBigger">לוגו גדול +</button>
+          <button type="button" class="btn btn-outline-success btn-sm" id="wmSmaller">לוגו קטן −</button>
+        </div>
+        <div class="small text-muted">
+          טיפ: אפשר פשוט לגעת על הקנבס במקום שבו אתה רוצה את הלוגו.
+        </div>
+      </div>
+    {% endif %}
+  {% endif %}
+
+  <hr>
+
+  <form method="post" id="detailForm">
+    <div class="mb-2">
+      <label class="form-label">טקסט לעריכה / שליחה</label>
+      <textarea class="form-control" name="text">{{ message.text }}</textarea>
+    </div>
+
+    <div class="form-check mb-1">
+      <input class="form-check-input" type="checkbox" name="translate_he" id="translate_he">
+      <label class="form-check-label" for="translate_he">
+        תרגום אוטומטי לעברית לפני שליחה
+      </label>
+    </div>
+
+    {% if message.has_media %}
+      <hr class="my-2">
+      <div class="mb-1 small text-muted">
+        אפשרות לטשטוש וסימן מים (לוגו) לפי האזור שהגדרת בקנבס. אם לא תסמן – המדיה תישלח כפי שהיא.
+      </div>
+      <div class="form-check mb-1">
+        <input class="form-check-input" type="checkbox" name="blur_media" id="blur_media" checked>
+        <label class="form-check-label" for="blur_media">
+          טשטש את התמונה / הווידיאו
         </label>
       </div>
+      <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="add_watermark" id="add_watermark" checked>
+        <label class="form-check-label" for="add_watermark">
+          הוסף סימן מים (תמונת הלוגו)
+        </label>
+      </div>
+    {% endif %}
 
-      <!-- שדות חבויים לאיזורי טשטוש/לוגו (אם מימשת קנבס מתקדם) -->
+    {% if message.media_type == "תמונה" or message.media_type == "וידאו" %}
       <input type="hidden" name="blur_x" id="blur_x">
       <input type="hidden" name="blur_y" id="blur_y">
       <input type="hidden" name="blur_w" id="blur_w">
@@ -67,11 +119,255 @@
       <input type="hidden" name="wm_x" id="wm_x">
       <input type="hidden" name="wm_y" id="wm_y">
       <input type="hidden" name="wm_size" id="wm_size">
+    {% endif %}
 
-      <button type="submit" class="btn btn-primary w-100 mt-3">
-        שלח עם ההגדרות הנוכחיות
-      </button>
-    </form>
-  </div>
+    <hr class="my-2">
+
+    <div class="form-check mb-1">
+      <input class="form-check-input" type="checkbox" name="send_tg" id="send_tg" checked>
+      <label class="form-check-label" for="send_tg">
+        שלח לטלגרם (ערוץ ברירת מחדל)
+      </label>
+    </div>
+    <div class="form-check mb-3">
+      <input class="form-check-input" type="checkbox" name="send_fb" id="send_fb">
+      <label class="form-check-label" for="send_fb">
+        שלח גם לפייסבוק (כולל מדיה אם קיימת)
+      </label>
+    </div>
+
+    <button type="submit" class="btn btn-primary w-100">
+      שלח עם ההגדרות הנוכחיות
+    </button>
+  </form>
 </div>
+
+{% if message.has_media and previews and (message.media_type == "תמונה" or message.media_type == "וידאו") %}
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const canvas = document.getElementById("editCanvas");
+    const form = document.getElementById("detailForm");
+    if (!canvas || !form) return;
+
+    const ctx = canvas.getContext("2d");
+
+    const blur_x = document.getElementById("blur_x");
+    const blur_y = document.getElementById("blur_y");
+    const blur_w = document.getElementById("blur_w");
+    const blur_h = document.getElementById("blur_h");
+    const wm_x = document.getElementById("wm_x");
+    const wm_y = document.getElementById("wm_y");
+    const wm_size = document.getElementById("wm_size");
+
+    const imgUrl = canvas.dataset.imageUrl || "{{ previews.original or previews.processed }}";
+    const videoEl = document.getElementById("editVideo");
+
+    let img = null;
+    let useVideoFrame = false;
+
+    if (videoEl) {
+      useVideoFrame = true;
+    } else {
+      img = new Image();
+      img.src = imgUrl;
+    }
+
+    let imgW = 0, imgH = 0;
+    let cvsW = 0, cvsH = 0;
+    let scale = 1;
+
+    let blurRect = { x: 0, y: 0, w: 0, h: 0 };
+    let wmRect = { x: 0, y: 0, size: 0 };
+
+    function initRects(width, height) {
+      imgW = width;
+      imgH = height;
+
+      cvsW = canvas.clientWidth || 600;
+      cvsH = Math.round(cvsW * (imgH / imgW));
+
+      canvas.width = cvsW;
+      canvas.height = cvsH;
+
+      scale = imgW / cvsW;
+
+      blurRect = {
+        x: imgW * 0.25,
+        y: imgH * 0.25,
+        w: imgW * 0.5,
+        h: imgH * 0.5
+      };
+      wmRect = {
+        x: imgW * 0.8,
+        y: imgH * 0.8,
+        size: Math.min(imgW, imgH) * 0.2
+      };
+
+      draw();
+    }
+
+    function draw() {
+      if (imgW === 0 || imgH === 0) return;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (useVideoFrame && videoEl && videoEl.readyState >= 2) {
+        ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+      } else if (img) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      }
+
+      ctx.strokeStyle = "#39ff14";
+      ctx.lineWidth = 2;
+      const bx = blurRect.x / scale;
+      const by = blurRect.y / scale;
+      const bw = blurRect.w / scale;
+      const bh = blurRect.h / scale;
+      ctx.strokeRect(bx, by, bw, bh);
+
+      ctx.strokeStyle = "#00ffaa";
+      ctx.lineWidth = 2;
+      const ws = wmRect.size / scale;
+      const wx = (wmRect.x / scale) - ws / 2;
+      const wy = (wmRect.y / scale) - ws / 2;
+      ctx.strokeRect(wx, wy, ws, ws);
+    }
+
+    function clampBlur() {
+      blurRect.x = Math.max(0, Math.min(blurRect.x, imgW - 10));
+      blurRect.y = Math.max(0, Math.min(blurRect.y, imgH - 10));
+      blurRect.w = Math.max(20, Math.min(blurRect.w, imgW - blurRect.x));
+      blurRect.h = Math.max(20, Math.min(blurRect.h, imgH - blurRect.y));
+    }
+
+    function clampWm() {
+      wmRect.size = Math.max(20, Math.min(wmRect.size, Math.max(imgW, imgH)));
+      wmRect.x = Math.max(0, Math.min(wmRect.x, imgW));
+      wmRect.y = Math.max(0, Math.min(wmRect.y, imgH));
+    }
+
+    if (!useVideoFrame && img) {
+      img.onload = function () {
+        initRects(img.naturalWidth || img.width, img.naturalHeight || img.height);
+      };
+    }
+
+    if (useVideoFrame && videoEl) {
+      videoEl.addEventListener("loadedmetadata", function () {
+        initRects(videoEl.videoWidth, videoEl.videoHeight);
+      });
+      videoEl.addEventListener("timeupdate", function () {
+        draw();
+      });
+    }
+
+    canvas.addEventListener("click", function (e) {
+      if (imgW === 0 || imgH === 0) return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      wmRect.x = cx * scale;
+      wmRect.y = cy * scale;
+      clampWm();
+      draw();
+    });
+
+    const stepPos = 40;
+    const stepSize = 40;
+
+    function byId(id) { return document.getElementById(id); }
+
+    const blurUp = byId("blurUp");
+    const blurDown = byId("blurDown");
+    const blurLeft = byId("blurLeft");
+    const blurRight = byId("blurRight");
+    const blurBigger = byId("blurBigger");
+    const blurSmaller = byId("blurSmaller");
+
+    if (blurUp) blurUp.onclick = function () {
+      blurRect.y -= stepPos;
+      clampBlur();
+      draw();
+    };
+    if (blurDown) blurDown.onclick = function () {
+      blurRect.y += stepPos;
+      clampBlur();
+      draw();
+    };
+    if (blurLeft) blurLeft.onclick = function () {
+      blurRect.x -= stepPos;
+      clampBlur();
+      draw();
+    };
+    if (blurRight) blurRight.onclick = function () {
+      blurRect.x += stepPos;
+      clampBlur();
+      draw();
+    };
+    if (blurBigger) blurBigger.onclick = function () {
+      blurRect.w += stepSize;
+      blurRect.h += stepSize;
+      clampBlur();
+      draw();
+    };
+    if (blurSmaller) blurSmaller.onclick = function () {
+      blurRect.w -= stepSize;
+      blurRect.h -= stepSize;
+      clampBlur();
+      draw();
+    };
+
+    const wmUp = byId("wmUp");
+    const wmDown = byId("wmDown");
+    const wmLeft = byId("wmLeft");
+    const wmRight = byId("wmRight");
+    const wmBigger = byId("wmBigger");
+    const wmSmaller = byId("wmSmaller");
+
+    if (wmUp) wmUp.onclick = function () {
+      wmRect.y -= stepPos;
+      clampWm();
+      draw();
+    };
+    if (wmDown) wmDown.onclick = function () {
+      wmRect.y += stepPos;
+      clampWm();
+      draw();
+    };
+    if (wmLeft) wmLeft.onclick = function () {
+      wmRect.x -= stepPos;
+      clampWm();
+      draw();
+    };
+    if (wmRight) wmRight.onclick = function () {
+      wmRect.x += stepPos;
+      clampWm();
+      draw();
+    };
+    if (wmBigger) wmBigger.onclick = function () {
+      wmRect.size += stepSize;
+      clampWm();
+      draw();
+    };
+    if (wmSmaller) wmSmaller.onclick = function () {
+      wmRect.size -= stepSize;
+      clampWm();
+      draw();
+    };
+
+    form.addEventListener("submit", function () {
+      if (imgW === 0 || imgH === 0) return;
+      clampBlur();
+      clampWm();
+      if (blur_x) blur_x.value = Math.round(blurRect.x);
+      if (blur_y) blur_y.value = Math.round(blurRect.y);
+      if (blur_w) blur_w.value = Math.round(blurRect.w);
+      if (blur_h) blur_h.value = Math.round(blurRect.h);
+      if (wm_x) wm_x.value = Math.round(wmRect.x);
+      if (wm_y) wm_y.value = Math.round(wmRect.y);
+      if (wm_size) wm_size.value = Math.round(wmRect.size);
+    });
+  });
+</script>
+{% endif %}
 {% endblock %}
