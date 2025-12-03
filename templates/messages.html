@@ -1,0 +1,35 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">הודעות אחרונות</div>
+    <div class="card-subtitle">נשמרות עד {{ MAX_MESSAGES|default(120) }} הודעות אחרונות</div>
+  </div>
+  <div class="card-body">
+    {% if messages %}
+      <div class="msg-list">
+        {% for m in messages %}
+          <a href="{{ url_for('message_detail', msg_id=m.message_id or m['message_id']) }}" class="msg-item">
+            <div class="msg-main">
+              <div class="msg-text">{{ (m.text or m['text'])|truncate(80) }}</div>
+              <div class="msg-meta">
+                <span>{{ m.sender or m['sender'] }}</span> ·
+                <span>{{ m.date or m['date'] }}</span>
+              </div>
+            </div>
+            {% if m.has_media or m['has_media'] %}
+              <div class="msg-tag">מדיה</div>
+            {% endif %}
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="empty-state">
+        עדיין אין הודעות במערכת.
+        <br>
+        <a href="{{ url_for('new_message') }}">צור הודעה חדשה</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

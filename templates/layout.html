@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8">
+    <title>פסיפלונט Web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+  </head>
+  <body class="app-body">
+    <header class="app-header">
+      <div class="app-title">פסיפלונט Web</div>
+      <div class="app-subtitle">מרכז שליטה לטלגרם ופייסבוק</div>
+    </header>
+
+    <main class="app-main">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-container">
+          {% for category, msg in messages %}
+            <div class="flash flash-{{ category }}">{{ msg }}</div>
+          {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </main>
+
+    <nav class="app-nav">
+      <a href="{{ url_for('messages_list') }}" class="nav-btn {% if request.endpoint == 'messages_list' %}active{% endif %}">הודעות</a>
+      <a href="{{ url_for('new_message') }}" class="nav-btn {% if request.endpoint == 'new_message' %}active{% endif %}">הודעה חדשה</a>
+      <a href="{{ url_for('settings_page') }}" class="nav-btn {% if request.endpoint == 'settings_page' %}active{% endif %}">הגדרות</a>
+    </nav>
+  </body>
+</html>

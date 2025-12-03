@@ -1,0 +1,77 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">פרטי הודעה</div>
+    <div class="card-subtitle">
+      #{{ message.message_id }} · {{ message.sender }} · {{ message.date }}
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="msg-full-text">{{ message.text }}</div>
+
+    {% if message.has_media and previews.original %}
+      <div class="media-preview">
+        {% if message.media_type == "תמונה" %}
+          <img src="{{ previews.original }}" class="media-img">
+        {% elif message.media_type == "וידאו" %}
+          <video class="media-video" controls>
+            <source src="{{ previews.original }}" type="video/mp4">
+          </video>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <hr class="divider">
+
+    <form method="post" id="detailForm">
+      <div class="form-group">
+        <label class="form-label">טקסט לעריכה / שליחה</label>
+        <textarea name="text" class="form-input" rows="4">{{ message.text }}</textarea>
+      </div>
+
+      <label class="form-check">
+        <input type="checkbox" name="translate_he">
+        <span>תרגום אוטומטי לעברית</span>
+      </label>
+
+      {% if message.has_media %}
+        <div class="form-group mt-2">
+          <label class="form-check">
+            <input type="checkbox" name="blur_media" checked>
+            <span>טשטוש המדיה</span>
+          </label>
+          <label class="form-check">
+            <input type="checkbox" name="add_watermark" checked>
+            <span>הוסף סימן מים (לוגו)</span>
+          </label>
+        </div>
+      {% endif %}
+
+      <div class="form-group mt-2">
+        <label class="form-check">
+          <input type="checkbox" name="send_tg" checked>
+          <span>שלח לטלגרם</span>
+        </label>
+        <label class="form-check">
+          <input type="checkbox" name="send_fb">
+          <span>שלח גם לפייסבוק</span>
+        </label>
+      </div>
+
+      <!-- שדות חבויים לאיזורי טשטוש/לוגו (אם מימשת קנבס מתקדם) -->
+      <input type="hidden" name="blur_x" id="blur_x">
+      <input type="hidden" name="blur_y" id="blur_y">
+      <input type="hidden" name="blur_w" id="blur_w">
+      <input type="hidden" name="blur_h" id="blur_h">
+      <input type="hidden" name="wm_x" id="wm_x">
+      <input type="hidden" name="wm_y" id="wm_y">
+      <input type="hidden" name="wm_size" id="wm_size">
+
+      <button type="submit" class="btn btn-primary w-100 mt-3">
+        שלח עם ההגדרות הנוכחיות
+      </button>
+    </form>
+  </div>
+</div>
+{% endblock %}

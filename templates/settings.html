@@ -1,0 +1,70 @@
+{% extends "layout.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">הגדרות מערכת</div>
+    <div class="card-subtitle">טלגרם · פייסבוק · סימן מים</div>
+  </div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data">
+      <div class="form-group">
+        <label class="form-label">API ID (טלגרם)</label>
+        <input type="text" name="api_id" class="form-input" value="{{ settings.api_id }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">API Hash (טלגרם)</label>
+        <input type="text" name="api_hash" class="form-input" value="{{ settings.api_hash }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">מספר טלפון</label>
+        <input type="text" name="phone" class="form-input" value="{{ settings.phone }}" placeholder="+972...">
+      </div>
+      <div class="form-group">
+        <label class="form-label">ערוץ ברירת מחדל בטלגרם</label>
+        <input type="text" name="default_channel" class="form-input" value="{{ settings.default_channel }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">חתימה אוטומטית (Signature)</label>
+        <textarea name="signature_text" class="form-input" rows="2">{{ settings.signature_text }}</textarea>
+      </div>
+
+      <hr class="divider">
+
+      <div class="form-group">
+        <label class="form-label">Facebook Page Access Token</label>
+        <input type="text" name="facebook_page_access_token" class="form-input" value="{{ settings.facebook_page_access_token }}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Facebook Page ID</label>
+        <input type="text" name="facebook_page_id" class="form-input" value="{{ settings.facebook_page_id }}">
+      </div>
+
+      <hr class="divider">
+
+      <div class="form-group">
+        <label class="form-label">סימן מים (תמונת לוגו אחת, PNG)</label>
+        <input type="file" name="watermark_image" class="form-input">
+        {% if settings.watermark_image %}
+          <div class="small text-muted mt-1">קיים קובץ: {{ settings.watermark_image }}</div>
+        {% endif %}
+      </div>
+
+      <hr class="divider">
+
+      <div class="form-group">
+        <div class="form-label">התחברות לטלגרם</div>
+        <div class="login-row">
+          <button type="submit" name="login_step" value="send_code" class="btn btn-secondary">שליחת קוד</button>
+          <input type="text" name="code" class="form-input code-input" placeholder="קוד אימות">
+        </div>
+        <div class="login-row mt-1">
+          <input type="password" name="password" class="form-input code-input" placeholder="סיסמת 2FA (אם יש)">
+          <button type="submit" name="login_step" value="confirm_code" class="btn btn-primary">אישור התחברות</button>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 mt-3">שמור הגדרות</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
