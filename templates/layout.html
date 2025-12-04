@@ -1,35 +1,62 @@
 <!doctype html>
 <html lang="he" dir="rtl">
-  <head>
+<head>
     <meta charset="utf-8">
     <title>פסיפלונט Web</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
-  </head>
-  <body class="app-body">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="app-shell">
     <header class="app-header">
-      <div class="app-title">פסיפלונט Web</div>
-      <div class="app-subtitle">מרכז שליטה לטלגרם ופייסבוק</div>
+        <div class="brand">
+            <div class="brand-logo">P</div>
+            <div class="brand-text">
+                <div class="brand-title">פסיפלונט</div>
+                <div class="brand-sub">מרכז שליטה לטלגרם</div>
+            </div>
+        </div>
+        {% if session.get('app_authed') %}
+        <nav class="top-nav">
+            <a href="{{ url_for('messages') }}"
+               class="nav-btn {% if request.endpoint == 'messages' %}active{% endif %}">
+                הודעות
+            </a>
+            <a href="{{ url_for('new_message') }}"
+               class="nav-btn {% if request.endpoint == 'new_message' %}active{% endif %}">
+                חדשה
+            </a>
+            <a href="{{ url_for('settings_page') }}"
+               class="nav-btn {% if request.endpoint == 'settings_page' %}active{% endif %}">
+                הגדרות
+            </a>
+            <a href="{{ url_for('logout') }}"
+               class="nav-btn nav-logout">
+                יציאה
+            </a>
+        </nav>
+        {% endif %}
     </header>
 
     <main class="app-main">
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          <div class="flash-container">
-          {% for category, msg in messages %}
-            <div class="flash flash-{{ category }}">{{ msg }}</div>
-          {% endfor %}
-          </div>
-        {% endif %}
-      {% endwith %}
+        {% with msgs = get_flashed_messages(with_categories=true) %}
+          {% if msgs %}
+            <div class="flash-container">
+              {% for category, msg in msgs %}
+                <div class="flash flash-{{ category }}">{{ msg }}</div>
+              {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
 
-      {% block content %}{% endblock %}
+        {% block content %}{% endblock %}
     </main>
 
-    <nav class="app-nav">
-      <a href="{{ url_for('messages_list') }}" class="nav-btn {% if request.endpoint == 'messages_list' %}active{% endif %}">הודעות</a>
-      <a href="{{ url_for('new_message') }}" class="nav-btn {% if request.endpoint == 'new_message' %}active{% endif %}">הודעה חדשה</a>
-      <a href="{{ url_for('settings_page') }}" class="nav-btn {% if request.endpoint == 'settings_page' %}active{% endif %}">הגדרות</a>
-    </nav>
-  </body>
+    <footer class="app-footer">
+        <span>© פסיפלונט</span>
+        <span class="dot-sep">•</span>
+        <span>גרסת ווב מותאמת מובייל</span>
+    </footer>
+</div>
+</body>
 </html>
