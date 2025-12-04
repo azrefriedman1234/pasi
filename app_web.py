@@ -1,9 +1,8 @@
 import os
-import json
-import logging
 import asyncio
-from datetime import datetime
+import logging
 from pathlib import Path
+from datetime import timezone
 
 from flask import (
     Flask,
@@ -11,33 +10,32 @@ from flask import (
     request,
     redirect,
     url_for,
+    session,
     send_from_directory,
     flash,
-    session,
 )
-
-from telethon import TelegramClient
-from telethon.errors import (
-    SessionPasswordNeededError,
-    PhoneCodeInvalidError,
-    PhoneCodeExpiredError,
-)
-
+from telethon import TelegramClient, errors
+from deep_translator import GoogleTranslator  # כרגע לא בשימוש, נשאר אם תרצה תרגום
 from PIL import Image, ImageFilter
+import requests
+import json
+import shutil
+import subprocess
+import uuid
 
-# --------------------------------------------------------------------------
-# הגדרות כלליות
-# --------------------------------------------------------------------------
+# -------------------------------------------------
+# בסיס נתיבים
+# -------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 MEDIA_DIR = DATA_DIR / "media"
-SETTINGS_PATH = BASE_DIR / "settings.json"
-SESSION_PATH = DATA_DIR / "telegram.session"
 WATERMARK_PATH = DATA_DIR / "watermark.png"
+SETTINGS_PATH = DATA_DIR / "settings.json"
+TELEGRAM_SESSION_PATH = DATA_DIR / "telegram.session"
 
-DATA_DIR.mkdir(exist_ok=True)
-MEDIA_DIR.mkdir(exist_ok=True)
+for p in (DATA_DIR, MEDIA_DIR):
+    p.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,54 +43,57 @@ logging.basicConfig(
 )
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.secret_key = os.environ.get("PASIFLONET_SECRET_KEY", "dev-secret-key")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-pasiflonet")
+
+# סיסמת כניסה לאתר
+APP_LOGIN_PASSWORD = "7447"
 
 
-# --------------------------------------------------------------------------
-# עבודה עם settings.json
-# --------------------------------------------------------------------------
-
-DEFAULT_SETTINGS = {
-    "telegram_api_id": "",
-    "telegram_api_hash": "",
-    "telegram_phone": "",
-    "telegram_password": "",
-    "telegram_target": "",  # ערוץ / יוזר יעד לשליחה
-    # לשימוש פנימי בזרימת קוד:
-    "telegram_phone_code_hash": "",
-    "telegram_phone_for_login": "",
-}
+# -------------------------------------------------
+# עזר: טעינה ושמירת הגדרות
+# -------------------------------------------------
 
 
 def load_settings() -> dict:
     if not SETTINGS_PATH.exists():
-        logging.warning("settings.json לא קיים – נוצר קובץ ברירת מחדל")
-        save_settings(DEFAULT_SETTINGS)
-        return DEFAULT_SETTINGS.copy()
+        logging.warning("settings.json לא קיים – ייווצר קובץ ברירת מחדל")
+        defaults = {
+            "telegram_api_id": "",
+            "telegram_api_hash": "",
+            "telegram_phone": "",
+            "telegram_password": "",
+            "telegram_target": "",
+            "telegram_phone_code_hash": "",
+            "facebook_page_id": "",
+            "facebook_access_token": "",
+            "facebook_enabled": False,
+            "auto_clean_limit": 120,
+        }
+        SETTINGS_PATH.write_text(
+            json.dumps(defaults, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return defaults
     try:
-        with SETTINGS_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        logging.exception("שגיאה בקריאת settings.json – נטען ברירת מחדל")
-        data = {}
-    merged = DEFAULT_SETTINGS.copy()
-    merged.update(data)
-    return merged
+        return json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logging.error("load_settings: error reading settings.json: %s", e, exc_info=True)
+        return {}
 
 
 def save_settings(settings: dict) -> None:
     try:
-        with SETTINGS_PATH.open("w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
-    except Exception:
-        logging.exception("שגיאה בשמירת settings.json")
+        SETTINGS_PATH.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logging.error("save_settings: error writing settings.json: %s", e, exc_info=True)
 
 
-# --------------------------------------------------------------------------
-# עזר להתחברות לאתר (סיסמת 7447)
-# --------------------------------------------------------------------------
-
-LOGIN_PASSWORD = "7447"
+# -------------------------------------------------
+# דקורטור התחברות בסיסית לאתר
+# -------------------------------------------------
 
 
 def login_required(view_func):
@@ -107,28 +108,131 @@ def login_required(view_func):
     return wrapper
 
 
-# --------------------------------------------------------------------------
-# עזר טלגרם – בניית Client
-# --------------------------------------------------------------------------
+# -------------------------------------------------
+# עיבוד תמונה/וידיאו – טשטוש + סימן מים
+# -------------------------------------------------
 
-def _build_telegram_client(api_id: int, api_hash: str) -> TelegramClient:
+
+def apply_blur_and_watermark_image(
+    src_path: Path,
+    dst_path: Path,
+    blur: bool,
+    blur_region: dict | None,
+    add_watermark: bool,
+) -> None:
     """
-    יוצר TelegramClient עם קובץ סשן קבוע (SESSION_PATH).
+    עיבוד תמונה עם טשטוש אזורי/מלא וסימן מים (אם קיים).
+    blur_region: dict עם x, y, w, h באחוזים (0-100) יחסית לתמונה.
     """
-    client = TelegramClient(str(SESSION_PATH), api_id, api_hash)
-    return client
+    img = Image.open(src_path).convert("RGBA")
+
+    if blur:
+        if blur_region:
+            w, h = img.size
+            x = int(w * float(blur_region.get("x", 0)) / 100)
+            y = int(h * float(blur_region.get("y", 0)) / 100)
+            bw = int(w * float(blur_region.get("w", 100)) / 100)
+            bh = int(h * float(blur_region.get("h", 100)) / 100)
+            box = (x, y, min(x + bw, w), min(y + bh, h))
+            crop = img.crop(box).filter(ImageFilter.GaussianBlur(radius=20))
+            img.paste(crop, box)
+        else:
+            img = img.filter(ImageFilter.GaussianBlur(radius=20))
+
+    if add_watermark and WATERMARK_PATH.exists():
+        try:
+            wm = Image.open(WATERMARK_PATH).convert("RGBA")
+            # נקטין את החותמת – ~20% מרוחב התמונה
+            base_w, base_h = img.size
+            target_w = int(base_w * 0.2)
+            ratio = target_w / wm.size[0]
+            wm = wm.resize((target_w, int(wm.size[1] * ratio)), Image.LANCZOS)
+
+            # מיקום: פינה ימנית תחתונה
+            x = base_w - wm.size[0] - 10
+            y = base_h - wm.size[1] - 10
+
+            img.alpha_composite(wm, (x, y))
+        except Exception as e:
+            logging.error("apply_blur_and_watermark_image: watermark error: %s", e, exc_info=True)
+
+    img = img.convert("RGB")
+    img.save(dst_path, format="JPEG", quality=90)
+
+
+def apply_blur_and_watermark_video(
+    src_path: Path,
+    dst_path: Path,
+    blur: bool,
+    blur_region: dict | None,
+    add_watermark: bool,
+) -> None:
+    """
+    עיבוד וידיאו עם ffmpeg – טשטוש אזורי/מלא + סימן מים.
+    שימוש ב-delogo כטשטוש אזורי (זה בעצם בלר גס).
+    """
+    filters = []
+
+    if blur:
+        if blur_region:
+            fx = float(blur_region.get("x", 0)) / 100.0
+            fy = float(blur_region.get("y", 0)) / 100.0
+            fw = float(blur_region.get("w", 100)) / 100.0
+            fh = float(blur_region.get("h", 100)) / 100.0
+            filters.append(
+                f"delogo=x='iw*{fx}':y='ih*{fy}':w='iw*{fw}':h='ih*{fh}':show=0"
+            )
+        else:
+            filters.append("boxblur=10:1")
+
+    wm_filter = None
+    if add_watermark and WATERMARK_PATH.exists():
+        wm_filter = "overlay=W-w-10:H-h-10"
+
+    vf = ""
+    if filters and wm_filter:
+        vf = ",".join(filters + [wm_filter])
+    elif filters:
+        vf = ",".join(filters)
+    elif wm_filter:
+        vf = wm_filter
+
+    cmd = ["ffmpeg", "-y", "-i", str(src_path)]
+
+    if add_watermark and WATERMARK_PATH.exists():
+        cmd.extend(["-i", str(WATERMARK_PATH)])
+        if vf:
+            cmd.extend(["-filter_complex", vf])
+        cmd.extend(["-c:v", "libx264", "-c:a", "copy", "-preset", "veryfast"])
+    else:
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend(["-c:v", "libx264", "-c:a", "copy", "-preset", "veryfast"])
+
+    cmd.append(str(dst_path))
+
+    logging.info("Running ffmpeg: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        logging.error("ffmpeg error: %s", e, exc_info=True)
+        # fallback – רק העתקה
+        shutil.copy(src_path, dst_path)
+
+
+# -------------------------------------------------
+# עזר: טלגרם
+# -------------------------------------------------
 
 
 async def _send_telegram_code_async(api_id: int, api_hash: str, phone: str) -> str:
-    """
-    שולח קוד התחברות לטלגרם ומחזיר phone_code_hash.
-    """
-    client = _build_telegram_client(api_id, api_hash)
+    client = TelegramClient(str(TELEGRAM_SESSION_PATH), api_id, api_hash)
+    await client.connect()
     try:
-        await client.connect()
         result = await client.send_code_request(phone)
-        logging.info("Telegram code sent, phone_code_hash received")
-        return result.phone_code_hash
+        phone_code_hash = result.phone_code_hash
+        logging.info("Telegram code sent, phone_code_hash=%s", phone_code_hash)
+        return phone_code_hash
     finally:
         await client.disconnect()
 
@@ -141,223 +245,216 @@ async def _login_telegram_async(
     password: str | None,
     phone_code_hash: str,
 ) -> None:
-    """
-    לוגין לטלגרם בעזרת קוד שנשלח, כולל 2FA אם צריך.
-    משתמש ב-phone_code_hash שנשמר קודם.
-    """
-    client = _build_telegram_client(api_id, api_hash)
+    client = TelegramClient(str(TELEGRAM_SESSION_PATH), api_id, api_hash)
+    await client.connect()
     try:
-        await client.connect()
-
-        try:
-            await client.sign_in(
-                phone=phone,
-                code=code,
-                phone_code_hash=phone_code_hash,
-            )
-        except SessionPasswordNeededError:
-            # יש אימות דו־שלבי
-            await client.sign_in(password=password or "")
-
-        if not await client.is_user_authorized():
-            raise RuntimeError("המשתמש עדיין לא מאומת בטלגרם")
-
-        logging.info("Telegram login success, session saved at %s", SESSION_PATH)
-
-    except PhoneCodeInvalidError:
-        logging.exception("קוד האימות שגוי")
-        raise RuntimeError("קוד האימות שגוי – נסה שוב.")
-    except PhoneCodeExpiredError:
-        logging.exception("קוד האימות פג תוקף")
-        raise RuntimeError("קוד האימות פג תוקף – בקש קוד חדש.")
+        await client.sign_in(
+            phone=phone,
+            code=code,
+            phone_code_hash=phone_code_hash or None,
+            password=password or None,
+        )
+        logging.info("Telegram login successful")
+    except errors.PhoneCodeExpiredError:
+        logging.error("Telegram login: code expired")
+        raise
+    except errors.SessionPasswordNeededError:
+        logging.error("Telegram login: 2FA password required or incorrect")
+        raise
     finally:
         await client.disconnect()
 
 
-async def _send_telegram_message_async(
+async def _fetch_messages_from_all_dialogs_async(api_id: int, api_hash: str) -> list[dict]:
+    """
+    מחזיר עד 120 ההודעות האחרונות – הודעה אחרונה מכל דיאלוג,
+    בלי GetHistory, כדי להימנע מ-FLOOD_WAIT.
+    """
+    client = TelegramClient(str(TELEGRAM_SESSION_PATH), api_id, api_hash)
+    await client.connect()
+
+    if not await client.is_user_authorized():
+        logging.warning("fetch_all_dialogs: client is not authorized")
+        await client.disconnect()
+        return []
+
+    dialogs = await client.get_dialogs(limit=120)
+
+    messages: list[dict] = []
+    for d in dialogs:
+        msg = d.message
+        if msg is None:
+            continue
+
+        text = msg.message or ""
+        dt = msg.date
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        messages.append(
+            {
+                "dialog_title": d.name or "שיחה ללא שם",
+                "text": text,
+                "date": dt,
+                "date_str": dt.astimezone().strftime("%Y-%m-%d %H:%M"),
+                "has_media": bool(msg.media),
+            }
+        )
+
+    await client.disconnect()
+    messages.sort(key=lambda m: m["date"], reverse=True)
+    return messages[:120]
+
+
+async def _send_to_telegram_async(
     api_id: int,
     api_hash: str,
-    text: str,
     target: str,
-    media_path: str | None = None,
+    text: str,
+    media_path: Path | None,
 ) -> None:
-    """
-    שולח הודעה / מדיה לטלגרם ליעד מסוים (ערוץ / יוזר).
-    מניח שכבר יש סשן מאומת (SESSION_PATH).
-    """
-    client = _build_telegram_client(api_id, api_hash)
+    client = TelegramClient(str(TELEGRAM_SESSION_PATH), api_id, api_hash)
+    await client.connect()
     try:
-        await client.connect()
-
         if not await client.is_user_authorized():
-            raise RuntimeError("סשן טלגרם לא מאומת – התחבר מחדש דרך ההגדרות.")
+            logging.error("send_to_telegram: client not authorized")
+            return
 
-        if media_path:
-            await client.send_file(target, media_path, caption=text or None)
+        if not target:
+            logging.error("send_to_telegram: no target chat configured")
+            return
+
+        if media_path and media_path.exists():
+            await client.send_file(target, str(media_path), caption=text or None)
         else:
-            await client.send_message(target, text)
-
-        logging.info("Telegram message sent to %s", target)
-
+            await client.send_message(target, text or "")
+        logging.info("Message sent to Telegram")
     finally:
         await client.disconnect()
 
 
-async def _fetch_messages_from_all_dialogs_async(
-    api_id: int,
-    api_hash: str,
-    limit_per_dialog: int = 5,
-    max_total: int = 120,
-) -> list[dict]:
+# -------------------------------------------------
+# עזר: פייסבוק
+# -------------------------------------------------
+
+
+def send_to_facebook(text: str, media_path: Path | None, is_video: bool, settings: dict) -> None:
     """
-    מושך הודעות אחרונות מכל הדיאלוגים (ערוצים, קבוצות, צ’אטים).
-    מוחזר כ-list של dict, בלי לשמור לקובץ.
+    פרסום פוסט לדף פייסבוק:
+    - אם יש מדיה -> /photos או /videos
+    - אם אין מדיה -> /feed (פוסט טקסט בלבד)
     """
-    client = _build_telegram_client(api_id, api_hash)
-    items: list[dict] = []
+    page_id = (settings.get("facebook_page_id") or "").strip()
+    access_token = (settings.get("facebook_access_token") or "").strip()
+    enabled = settings.get("facebook_enabled", False)
+
+    if not (enabled and page_id and access_token):
+        logging.info("Facebook posting skipped (disabled or missing config).")
+        return
+
+    base_url = f"https://graph.facebook.com/v18.0/{page_id}"
+
     try:
-        await client.connect()
-        if not await client.is_user_authorized():
-            logging.warning("Telegram session not authorized – no messages fetched")
-            return []
+        if media_path is not None and media_path.exists():
+            files = {"source": open(media_path, "rb")}
+            data = {
+                "access_token": access_token,
+            }
+            if is_video:
+                data["description"] = text or ""
+                endpoint = "/videos"
+            else:
+                data["caption"] = text or ""
+                endpoint = "/photos"
 
-        async for dialog in client.iter_dialogs():
-            # אפשר לסנן כאן רק ערוצים/קבוצות/יוזרים – נשאיר הכל
+            resp = requests.post(base_url + endpoint, data=data, files=files, timeout=30)
+            logging.info("Facebook media post status %s: %s", resp.status_code, resp.text[:200])
+        else:
+            data = {
+                "access_token": access_token,
+                "message": text or "",
+            }
+            resp = requests.post(base_url + "/feed", data=data, timeout=30)
+            logging.info("Facebook text post status %s: %s", resp.status_code, resp.text[:200])
+
+    except Exception as e:
+        logging.error("Error sending to Facebook: %s", e, exc_info=True)
+
+
+def auto_clean_media_and_messages(limit: int = 120) -> None:
+    """
+    ניקוי אוטומטי של קבצי מדיה ישנים – אם יש יותר מ-limit קבצים.
+    (ניקוי הודעות בטבלאות נעשה ברמת DB / JSON אם יש – כאן מטפלים רק במדיה.)
+    """
+    try:
+        files = sorted(
+            [p for p in MEDIA_DIR.glob("*") if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+        )
+        if len(files) <= limit:
+            return
+        to_delete = files[0 : len(files) - limit]
+        for f in to_delete:
             try:
-                async for msg in client.iter_messages(dialog, limit=limit_per_dialog):
-                    if not (msg.message or msg.media):
-                        continue
-
-                    ts = msg.date  # timezone-aware UTC
-                    items.append(
-                        {
-                            "dialog_id": dialog.id,
-                            "dialog_title": dialog.name or "",
-                            "message_id": msg.id,
-                            "text": msg.message or "",
-                            "has_media": bool(msg.media),
-                            "date": ts,
-                            "date_str": ts.astimezone().strftime(
-                                "%Y-%m-%d %H:%M:%S"
-                            ),
-                        }
-                    )
+                f.unlink()
             except Exception:
-                logging.exception("Error fetching messages for dialog %s", dialog.id)
-                continue
-
-        # מיון לפי זמן (חדש קודם)
-        items.sort(key=lambda x: x["date"], reverse=True)
-        if len(items) > max_total:
-            items = items[:max_total]
-
-        return items
-
-    finally:
-        await client.disconnect()
+                pass
+        logging.info("auto_clean_media: deleted %d old files", len(to_delete))
+    except Exception as e:
+        logging.error("auto_clean_media: %s", e, exc_info=True)
 
 
-# --------------------------------------------------------------------------
-# פונקציות טשטוש / סימן מים לתמונה (בשלב ראשון – רק תמונות סטילס)
-# --------------------------------------------------------------------------
-
-def apply_blur_and_watermark(
-    input_path: Path,
-    blur: bool,
-    use_watermark: bool,
-) -> Path:
-    """
-    טשטוש + סימן מים לתמונה (לוידאו צריך FFMPEG – אפשר להרחיב אחר כך).
-    מחזיר את הנתיב לקובץ המעובד (שומר כ- *_proc.png).
-    """
-    img = Image.open(input_path).convert("RGBA")
-
-    if blur:
-        img = img.filter(ImageFilter.GaussianBlur(radius=20))
-
-    if use_watermark and WATERMARK_PATH.exists():
-        try:
-            wm = Image.open(WATERMARK_PATH).convert("RGBA")
-            # שינוי גודל סימן מים ל־20% מרוחב התמונה
-            base_w, base_h = img.size
-            ratio = 0.2
-            new_w = int(base_w * ratio)
-            wm_ratio = wm.height / wm.width
-            new_h = int(new_w * wm_ratio)
-            wm = wm.resize((new_w, new_h))
-
-            # מיקום – פינה ימנית תחתונה
-            pos = (base_w - new_w - 10, base_h - new_h - 10)
-
-            img.alpha_composite(wm, dest=pos)
-        except Exception:
-            logging.exception("שגיאה בהוספת סימן מים")
-
-    out_path = input_path.with_name(input_path.stem + "_proc.png")
-    img.save(out_path, format="PNG")
-    return out_path
-
-
-# --------------------------------------------------------------------------
+# -------------------------------------------------
 # ראוטים
-# --------------------------------------------------------------------------
+# -------------------------------------------------
+
 
 @app.route("/")
 def index():
-    if not session.get("logged_in"):
-        return redirect(url_for("login"))
-    return redirect(url_for("messages"))
+    if session.get("logged_in"):
+        return redirect(url_for("messages"))
+    return redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        password = request.form.get("password", "")
-        if password == LOGIN_PASSWORD:
+        password = (request.form.get("password") or "").strip()
+        if password == APP_LOGIN_PASSWORD:
             session["logged_in"] = True
-            flash("ברוך הבא לפסיפלונט Web ✔", "success")
+            flash("התחברת בהצלחה", "success")
             return redirect(url_for("messages"))
         else:
             flash("סיסמה שגויה", "danger")
-            return redirect(url_for("login"))
     return render_template("login.html")
 
 
 @app.route("/logout")
 def logout():
     session.clear()
-    flash("התנתקת מהמערכת", "info")
     return redirect(url_for("login"))
 
 
 @app.route("/messages")
 @login_required
 def messages():
-    """
-    מציג הודעות מכל הערוצים/צ’אטים – נשלפות כל פעם מחדש מטלגרם
-    לפי הסשן שנשמר.
-    """
     settings = load_settings()
-    api_id = int(settings.get("telegram_api_id") or 0)
-    api_hash = settings.get("telegram_api_hash") or ""
+    api_id = (settings.get("telegram_api_id") or "").strip()
+    api_hash = (settings.get("telegram_api_hash") or "").strip()
 
-    telegram_connected = False
+    telegram_connected = TELEGRAM_SESSION_PATH.exists()
     messages_list: list[dict] = []
 
-    if api_id and api_hash and SESSION_PATH.exists():
+    if api_id and api_hash and telegram_connected:
         try:
             messages_list = asyncio.run(
-                _fetch_messages_from_all_dialogs_async(api_id, api_hash)
+                _fetch_messages_from_all_dialogs_async(int(api_id), api_hash)
             )
-            telegram_connected = True
         except Exception as e:
-            logging.exception("Error fetching Telegram messages: %s", e)
-            flash(
-                "שגיאה במשיכת הודעות מטלגרם – בדוק את ההתחברות בהגדרות.",
-                "danger",
-            )
+            logging.error("messages: error fetching from Telegram: %s", e, exc_info=True)
+            flash("שגיאה בטעינת הודעות מטלגרם", "danger")
     else:
-        flash("עדיין לא מוגדר חיבור לטלגרם (API / סשן).", "warning")
+        logging.info("messages: Telegram not configured or no session file")
 
     return render_template(
         "messages.html",
@@ -366,165 +463,194 @@ def messages():
     )
 
 
-@app.route("/new", methods=["GET", "POST"])
-@login_required
-def new_message():
-    settings = load_settings()
-    api_id = int(settings.get("telegram_api_id") or 0)
-    api_hash = settings.get("telegram_api_hash") or ""
-    target = settings.get("telegram_target") or ""
-
-    if request.method == "POST":
-        text = request.form.get("text", "").strip()
-        apply_blur_flag = bool(request.form.get("apply_blur"))
-        apply_wm_flag = bool(request.form.get("apply_watermark"))
-
-        if not api_id or not api_hash:
-            flash("חסרים API ID / API HASH בהגדרות טלגרם.", "danger")
-            return redirect(url_for("new_message"))
-
-        if not target:
-            flash("לא הוגדר ערוץ / יעד טלגרם בהגדרות.", "danger")
-            return redirect(url_for("new_message"))
-
-        media_file = request.files.get("media")
-        media_path = None
-
-        if media_file and media_file.filename:
-            filename = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{media_file.filename}"
-            save_path = MEDIA_DIR / filename
-            media_file.save(save_path)
-            media_path = str(save_path)
-
-            # אם זה תמונה – ניישם טשטוש / סימן מים
-            if apply_blur_flag or apply_wm_flag:
-                try:
-                    processed = apply_blur_and_watermark(
-                        save_path,
-                        blur=apply_blur_flag,
-                        use_watermark=apply_wm_flag,
-                    )
-                    media_path = str(processed)
-                except Exception:
-                    logging.exception("שגיאה בעיבוד תמונה")
-                    flash("שגיאה בעיבוד התמונה (טשטוש / סימן מים).", "danger")
-
-        try:
-            asyncio.run(
-                _send_telegram_message_async(
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    text=text,
-                    target=target,
-                    media_path=media_path,
-                )
-            )
-            flash("ההודעה נשלחה לטלגרם ✔", "success")
-            return redirect(url_for("messages"))
-        except Exception as e:
-            logging.exception("Telegram send failed: %s", e)
-            flash(f"שגיאה בשליחת הודעה לטלגרם: {e}", "danger")
-            return redirect(url_for("new_message"))
-
-    return render_template("new_message.html")
-
-
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings_page():
     settings = load_settings()
 
     if request.method == "POST":
-        action = request.form.get("action", "save")
+        logging.info("settings_page: POST data keys=%s", list(request.form.keys()))
 
-        # עדכון ערכים בסיסיים
-        settings["telegram_api_id"] = request.form.get("telegram_api_id", "").strip()
-        settings["telegram_api_hash"] = request.form.get("telegram_api_hash", "").strip()
-        settings["telegram_phone"] = request.form.get("telegram_phone", "").strip()
-        settings["telegram_password"] = request.form.get("telegram_password", "").strip()
-        settings["telegram_target"] = request.form.get("telegram_target", "").strip()
+        # עדכון שדות בסיס
+        settings["telegram_api_id"] = (request.form.get("telegram_api_id") or "").strip()
+        settings["telegram_api_hash"] = (request.form.get("telegram_api_hash") or "").strip()
+        settings["telegram_phone"] = (request.form.get("telegram_phone") or "").strip()
+        settings["telegram_password"] = (request.form.get("telegram_password") or "").strip()
+        settings["telegram_target"] = (request.form.get("telegram_target") or "").strip()
 
-        # שמירת watermark אם הועלה
-        wm_file = request.files.get("watermark_image")
-        if wm_file and wm_file.filename:
-            WATERMARK_PATH.parent.mkdir(exist_ok=True)
-            wm_file.save(WATERMARK_PATH)
-            logging.info("Watermark image saved to %s", WATERMARK_PATH)
-            flash("תמונת סימן המים נשמרה ✔", "success")
+        settings["facebook_page_id"] = (request.form.get("facebook_page_id") or "").strip()
+        settings["facebook_access_token"] = (request.form.get("facebook_access_token") or "").strip()
+        settings["facebook_enabled"] = bool(request.form.get("facebook_enabled"))
 
-        api_id_str = settings.get("telegram_api_id") or ""
-        api_hash = settings.get("telegram_api_hash") or ""
-        phone = settings.get("telegram_phone") or ""
+        # watermark upload
+        if "watermark" in request.files:
+            file = request.files["watermark"]
+            if file and file.filename:
+                WATERMARK_PATH.parent.mkdir(parents=True, exist_ok=True)
+                file.save(WATERMARK_PATH)
+                logging.info("Watermark image saved to %s", WATERMARK_PATH)
+                flash("סימן המים עודכן", "success")
+
+        api_id = settings.get("telegram_api_id")
+        api_hash = settings.get("telegram_api_hash")
+        phone = settings.get("telegram_phone")
         password = settings.get("telegram_password") or ""
 
-        api_id = int(api_id_str) if api_id_str.isdigit() else 0
-
-        # 1. שליחת קוד לטלגרם
-        if action == "send_code":
+        # כפתור שליחת קוד
+        if "send_code" in request.form:
+            logging.info("settings_page: send_code clicked")
             if not (api_id and api_hash and phone):
-                flash("חייבים למלא API ID / API HASH / טלפון לפני שליחת קוד.", "danger")
-                save_settings(settings)
-                return redirect(url_for("settings_page"))
-
-            try:
-                logging.info("settings_page: send_code clicked")
-                phone_code_hash = asyncio.run(
-                    _send_telegram_code_async(api_id, api_hash, phone)
-                )
-                settings["telegram_phone_code_hash"] = phone_code_hash
-                settings["telegram_phone_for_login"] = phone
-                flash("קוד נשלח לטלגרם ✔ – הזן את הקוד בתיבה ולחץ התחברות.", "success")
-            except Exception as e:
-                logging.exception("Send code error")
-                flash(f"שגיאה בשליחת קוד: {e}", "danger")
-
-            save_settings(settings)
-            return redirect(url_for("settings_page"))
-
-        # 2. התחברות לטלגרם עם קוד
-        if action == "login":
-            code = request.form.get("telegram_code", "").strip()
-            phone_code_hash = settings.get("telegram_phone_code_hash") or ""
-            phone_for_login = settings.get("telegram_phone_for_login") or phone
-
-            if not (api_id and api_hash and phone_for_login and code and phone_code_hash):
-                flash(
-                    "חייבים API ID, API HASH, טלפון, קוד אימות ו-phone_code_hash (לחץ קודם 'שליחת קוד').",
-                    "danger",
-                )
-                save_settings(settings)
-                return redirect(url_for("settings_page"))
-
-            try:
-                logging.info("settings_page: login clicked")
-                asyncio.run(
-                    _login_telegram_async(
-                        api_id=api_id,
-                        api_hash=api_hash,
-                        phone=phone_for_login,
-                        code=code,
-                        password=password or None,
-                        phone_code_hash=phone_code_hash,
+                flash("נא למלא API ID, API HASH וטלפון", "danger")
+            else:
+                try:
+                    phone_code_hash = asyncio.run(
+                        _send_telegram_code_async(int(api_id), api_hash, phone)
                     )
-                )
-                flash("ההתחברות לטלגרם הצליחה ✔", "success")
-                # מנקים את ה-hash אחרי הצלחה
-                settings["telegram_phone_code_hash"] = ""
-                settings["telegram_phone_for_login"] = ""
-            except Exception as e:
-                logging.exception("Login error")
-                flash(f"שגיאה בהתחברות לטלגרם: {e}", "danger")
+                    settings["telegram_phone_code_hash"] = phone_code_hash
+                    save_settings(settings)
+                    flash("קוד נשלח לטלגרם ✔", "success")
+                except Exception as e:
+                    logging.error("settings_page: send_code error: %s", e, exc_info=True)
+                    flash(f"שגיאה בשליחת קוד: {e}", "danger")
 
+        # כפתור התחברות לטלגרם
+        elif "login_telegram" in request.form:
+            logging.info("settings_page: login clicked")
+            code = (request.form.get("telegram_code") or "").strip()
+            phone_code_hash = settings.get("telegram_phone_code_hash") or ""
+            if not code:
+                flash("נא למלא קוד שהגיע בטלגרם", "danger")
+            elif not phone_code_hash:
+                flash("אין קוד אימות שנשמר – לחץ קודם על 'שליחת קוד'", "danger")
+            elif not (api_id and api_hash and phone):
+                flash("נא למלא API ID, API HASH וטלפון", "danger")
+            else:
+                try:
+                    asyncio.run(
+                        _login_telegram_async(
+                            int(api_id),
+                            api_hash,
+                            phone,
+                            code,
+                            password or None,
+                            phone_code_hash,
+                        )
+                    )
+                    flash("התחברות לטלגרם הצליחה ✔", "success")
+                except errors.PhoneCodeExpiredError:
+                    flash("קוד האימות פג תוקף – לחץ שוב 'שליחת קוד' והשתמש בקוד האחרון שמגיע", "danger")
+                except errors.SessionPasswordNeededError:
+                    flash("נדרש סיסמת אימות דו-שלבי (2FA) או שהסיסמה שגויה", "danger")
+                except Exception as e:
+                    logging.error("settings_page: login error: %s", e, exc_info=True)
+                    flash(f"שגיאת התחברות: {e}", "danger")
+
+        # שמירת הגדרות רגילה
+        else:
             save_settings(settings)
-            return redirect(url_for("settings_page"))
+            flash("ההגדרות נשמרו", "success")
 
-        # 3. שמירת הגדרות רגילה
-        flash("הגדרות נשמרו ✔", "success")
         save_settings(settings)
         return redirect(url_for("settings_page"))
 
-    # GET – הצגת הדף
     return render_template("settings.html", settings=settings)
+
+
+@app.route("/new", methods=["GET", "POST"])
+@login_required
+def new_message():
+    settings = load_settings()
+    if request.method == "POST":
+        text = (request.form.get("text") or "").strip()
+        apply_blur = bool(request.form.get("apply_blur"))
+        apply_watermark = bool(request.form.get("apply_watermark"))
+
+        # שדות טשטוש אזורי באחוזים (אם קיימים בטופס)
+        blur_region = None
+        try:
+            bx = request.form.get("blur_x")
+            by = request.form.get("blur_y")
+            bw = request.form.get("blur_w")
+            bh = request.form.get("blur_h")
+            if bx is not None and by is not None and bw is not None and bh is not None:
+                blur_region = {
+                    "x": float(bx),
+                    "y": float(by),
+                    "w": float(bw),
+                    "h": float(bh),
+                }
+        except Exception:
+            blur_region = None
+
+        upload = request.files.get("media")
+        media_path = None
+        processed_path = None
+        is_video = False
+
+        if upload and upload.filename:
+            ext = os.path.splitext(upload.filename)[1].lower()
+            uid = uuid.uuid4().hex
+            media_path = MEDIA_DIR / f"orig_{uid}{ext}"
+            upload.save(media_path)
+
+            # נשמור את הקובץ המעובד כ-jpg לסטילס ו-mp4 לוידיאו
+            if ext in [".mp4", ".mov", ".mkv", ".avi"]:
+                is_video = True
+                processed_path = MEDIA_DIR / f"proc_{uid}.mp4"
+                apply_blur_and_watermark_video(
+                    media_path,
+                    processed_path,
+                    blur=apply_blur,
+                    blur_region=blur_region,
+                    add_watermark=apply_watermark,
+                )
+            else:
+                is_video = False
+                processed_path = MEDIA_DIR / f"proc_{uid}.jpg"
+                apply_blur_and_watermark_image(
+                    media_path,
+                    processed_path,
+                    blur=apply_blur,
+                    blur_region=blur_region,
+                    add_watermark=apply_watermark,
+                )
+
+        # שליחה לטלגרם
+        api_id = (settings.get("telegram_api_id") or "").strip()
+        api_hash = (settings.get("telegram_api_hash") or "").strip()
+        target = (settings.get("telegram_target") or "").strip()
+
+        if api_id and api_hash and TELEGRAM_SESSION_PATH.exists():
+            try:
+                asyncio.run(
+                    _send_to_telegram_async(
+                        int(api_id),
+                        api_hash,
+                        target,
+                        text,
+                        processed_path or media_path,
+                    )
+                )
+            except Exception as e:
+                logging.error("new_message: telegram send error: %s", e, exc_info=True)
+                flash("שגיאה בשליחה לטלגרם", "danger")
+        else:
+            logging.info("new_message: telegram not configured or not logged in")
+
+        # שליחה לפייסבוק (אם הופעל)
+        try:
+            send_to_facebook(text, processed_path or media_path, is_video, settings)
+        except Exception as e:
+            logging.error("new_message: facebook send error: %s", e, exc_info=True)
+
+        # ניקוי אוטומטי של מדיה ישנה
+        limit = int(settings.get("auto_clean_limit") or 120)
+        auto_clean_media_and_messages(limit=limit)
+
+        flash("ההודעה נשלחה (טלגרם / פייסבוק אם הופעל)", "success")
+        return redirect(url_for("messages"))
+
+    return render_template("new_message.html", settings=settings)
 
 
 @app.route("/media/<path:filename>")
@@ -533,15 +659,6 @@ def media(filename: str):
     return send_from_directory(MEDIA_DIR, filename)
 
 
-@app.route("/ping")
-def ping():
-    return "OK", 200
-
-
-# --------------------------------------------------------------------------
-# הפעלה לוקלית
-# --------------------------------------------------------------------------
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # להרצה מקומית
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")), debug=True)
