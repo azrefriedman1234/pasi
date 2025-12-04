@@ -1,35 +1,55 @@
 {% extends "layout.html" %}
 {% block content %}
-<div class="card">
-  <div class="card-header">
-    <div class="card-title">הודעות אחרונות</div>
-    <div class="card-subtitle">נשמרות עד {{ MAX_MESSAGES|default(120) }} הודעות אחרונות</div>
-  </div>
-  <div class="card-body">
-    {% if messages %}
-      <div class="msg-list">
-        {% for m in messages %}
-          <a href="{{ url_for('message_detail', msg_id=m.message_id or m['message_id']) }}" class="msg-item">
-            <div class="msg-main">
-              <div class="msg-text">{{ (m.text or m['text'])|truncate(80) }}</div>
-              <div class="msg-meta">
-                <span>{{ m.sender or m['sender'] }}</span> ·
-                <span>{{ m.date or m['date'] }}</span>
-              </div>
-            </div>
-            {% if m.has_media or m['has_media'] %}
-              <div class="msg-tag">מדיה</div>
-            {% endif %}
-          </a>
-        {% endfor %}
+
+<h1 style="font-size:16px; margin:0 0 8px;">הודעות אחרונות</h1>
+<p style="font-size:12px; color:#9ca3af; margin:0 0 10px;">
+    מוצגות עד 120 הודעות אחרונות מכל הערוצים/שיחות בחשבון הטלגרם שלך.
+</p>
+
+{% if not telegram_connected %}
+  <p style="font-size:13px; color:#f97373; margin-top:8px;">
+      אין חיבור פעיל לטלגרם – בדוק את ההגדרות.
+  </p>
+{% endif %}
+
+{% if messages %}
+  <div style="display:flex; flex-direction:column; gap:8px;">
+    {% for msg in messages %}
+      <div style="
+          border-radius:10px;
+          padding:8px 10px;
+          background:rgba(15,23,42,0.9);
+          border:1px solid rgba(148,163,184,0.35);
+      ">
+        <div style="display:flex; justify-content:space-between; gap:6px; margin-bottom:4px;">
+          <div style="font-size:13px; font-weight:600; color:#e5e7eb;">
+            {{ msg.dialog_title or 'שיחה ללא שם' }}
+          </div>
+          <div style="font-size:11px; color:#9ca3af; white-space:nowrap;">
+            {{ msg.date_str }}
+          </div>
+        </div>
+        {% if msg.text %}
+          <div style="font-size:13px; color:#d1d5db; white-space:pre-wrap;">
+            {{ msg.text }}
+          </div>
+        {% else %}
+          <div style="font-size:12px; color:#9ca3af;">
+            (הודעת מדיה ללא תוכן טקסט)
+          </div>
+        {% endif %}
+        {% if msg.has_media %}
+          <div style="font-size:11px; color:#38bdf8; margin-top:4px;">
+            כולל מדיה 📎
+          </div>
+        {% endif %}
       </div>
-    {% else %}
-      <div class="empty-state">
-        עדיין אין הודעות במערכת.
-        <br>
-        <a href="{{ url_for('new_message') }}">צור הודעה חדשה</a>
-      </div>
-    {% endif %}
+    {% endfor %}
   </div>
-</div>
+{% else %}
+  <p style="font-size:13px; color:#9ca3af; margin-top:10px;">
+      אין עדיין הודעות להצגה.
+  </p>
+{% endif %}
+
 {% endblock %}
