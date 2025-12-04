@@ -1,249 +1,113 @@
-<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head>
-    <meta charset="UTF-8">
-    <title>הגדרות המערכת</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+{% extends "layout.html" %}
+{% block content %}
 
-    <link href="/static/css/style.css" rel="stylesheet">
+<div class="screen settings-screen">
+    <h1 class="screen-title">הגדרות מערכת</h1>
 
-    <style>
-        body {
-            background: #0d0d0d;
-            color: #e2e2e2;
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
+    <form method="post" enctype="multipart/form-data" class="settings-form">
 
-        .container {
-            width: 96%;
-            max-width: 600px;
-            margin: auto;
-            margin-top: 20px;
-            padding-bottom: 60px;
-        }
+        <section class="settings-section">
+            <h2>חיבור לטלגרם</h2>
 
-        .card {
-            background: #111;
-            border: 1px solid #222;
-            border-radius: 12px;
-            padding: 18px;
-            margin-bottom: 25px;
-            box-shadow: 0 0 10px rgba(0,255,0,0.15);
-        }
+            <div class="form-row">
+                <label for="telegram_api_id">Telegram API ID</label>
+                <input type="text" id="telegram_api_id" name="telegram_api_id"
+                       value="{{ settings.telegram_api_id }}" placeholder="לדוגמה: 1234567">
+            </div>
 
-        .section-title {
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: #00ff99;
-        }
+            <div class="form-row">
+                <label for="telegram_api_hash">Telegram API Hash</label>
+                <input type="text" id="telegram_api_hash" name="telegram_api_hash"
+                       value="{{ settings.telegram_api_hash }}" placeholder="hash מה- my.telegram.org">
+            </div>
 
-        .form-label {
-            margin-bottom: 4px;
-            display: block;
-        }
+            <div class="form-row">
+                <label for="telegram_phone">טלפון לחשבון טלגרם</label>
+                <input type="text" id="telegram_phone" name="telegram_phone"
+                       value="{{ settings.telegram_phone }}" placeholder="+9725...">
+            </div>
 
-        .form-input {
-            width: 100%;
-            padding: 10px;
-            border-radius: 8px;
-            background: #222;
-            border: 1px solid #333;
-            color: #fff;
-        }
+            <div class="form-row">
+                <label for="telegram_password">סיסמת 2FA (אם יש)</label>
+                <input type="password" id="telegram_password" name="telegram_password"
+                       value="{{ settings.telegram_password }}">
+            </div>
 
-        .btn {
-            padding: 12px;
-            border-radius: 8px;
-            border: none;
-            color: #fff;
-            font-size: 1rem;
-        }
+            <div class="form-row">
+                <label for="telegram_target">יעד לשליחה (user / channel / @handle)</label>
+                <input type="text" id="telegram_target" name="telegram_target"
+                       value="{{ settings.telegram_target }}" placeholder="@my_channel">
+            </div>
 
-        .btn-primary {
-            background: #009955;
-        }
+            <div class="form-row">
+                <label for="telegram_sources">ערוצי מקור (רשימה מופרדת בפסיקים)</label>
+                <input type="text" id="telegram_sources" name="telegram_sources"
+                       value="{{ settings.telegram_sources }}" placeholder="@source1,@source2">
+            </div>
 
-        .btn-secondary {
-            background: #0066ff;
-        }
+            <div class="form-row buttons-row">
+                <button type="submit" name="action" value="send_code" class="btn primary">
+                    שליחת קוד לטלגרם
+                </button>
 
-        .btn-danger {
-            background: #cc0033;
-        }
-
-        .badge {
-            padding: 6px 10px;
-            border-radius: 6px;
-            display: inline-block;
-            font-size: 0.85rem;
-        }
-
-        .badge-success {
-            background: #009933;
-            color: #fff;
-        }
-
-        .badge-warning {
-            background: #ffcc00;
-            color: #000;
-        }
-
-        .flash {
-            background: #333;
-            padding: 12px;
-            border-radius: 10px;
-            margin-bottom: 15px;
-            font-size: 0.95rem;
-        }
-
-        .flash-success {
-            border-right: 6px solid #00cc66;
-        }
-
-        .flash-danger {
-            border-right: 6px solid #cc0033;
-        }
-    </style>
-</head>
-
-<body>
-<div class="container">
-
-    <!-- הודעות פלאש -->
-    {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-            {% for category, msg in messages %}
-                <div class="flash flash-{{category}}">
-                    {{ msg }}
+                <div class="code-block">
+                    <label for="login_code">קוד אימות מטלגרם</label>
+                    <input type="text" id="login_code" name="login_code" placeholder="12345">
                 </div>
-            {% endfor %}
-        {% endif %}
-    {% endwith %}
 
-    <h2 class="section-title">הגדרות מערכת</h2>
+                <button type="submit" name="action" value="login" class="btn success">
+                    אישור התחברות
+                </button>
+            </div>
 
+            <p class="hint">
+                אם קוד האימות פג תוקף – שלח שוב קוד דרך הכפתור הראשון והשתמש בקוד האחרון שמגיע.
+            </p>
+        </section>
 
-    <!-- טופס שמירת הגדרות -->
-    <form method="post" enctype="multipart/form-data" class="card">
+        <section class="settings-section">
+            <h2>פייסבוק</h2>
 
-        <div class="section-title">פרטי טלגרם</div>
+            <div class="form-row">
+                <label for="facebook_page_token">Facebook Page Token</label>
+                <input type="text" id="facebook_page_token" name="facebook_page_token"
+                       value="{{ settings.facebook_page_token }}">
+            </div>
 
-        <label class="form-label">API ID</label>
-        <input type="text" class="form-input" name="api_id" value="{{ settings.api_id }}">
+            <div class="form-row">
+                <label for="facebook_page_id">Facebook Page ID</label>
+                <input type="text" id="facebook_page_id" name="facebook_page_id"
+                       value="{{ settings.facebook_page_id }}">
+            </div>
+        </section>
 
-        <label class="form-label">API Hash</label>
-        <input type="text" class="form-input" name="api_hash" value="{{ settings.api_hash }}">
+        <section class="settings-section">
+            <h2>סימן מים (Watermark)</h2>
 
-        <label class="form-label">מספר טלפון (בפורמט בינלאומי)</label>
-        <input type="text" class="form-input" name="phone" value="{{ settings.phone }}" placeholder="+9725XXXXXXXX">
+            <div class="form-row">
+                <label for="watermark_image">תמונת סימן מים</label>
+                <input type="file" id="watermark_image" name="watermark_image" accept="image/*">
+            </div>
 
-        <label class="form-label">ערוץ ברירת מחדל לשליחה</label>
-        <input type="text" class="form-input" name="default_channel" value="{{ settings.default_channel }}">
+            {% if watermark_exists %}
+            <p class="hint">
+                ✔ סימן מים שמור כבר במערכת (watermark.png)
+            </p>
+            {% else %}
+            <p class="hint">
+                עדיין לא הוגדר סימן מים. מומלץ להעלות תמונה (לוגו) פעם אחת.
+            </p>
+            {% endif %}
+        </section>
 
-        <label class="form-label">חתימה לתחתית הודעה</label>
-        <input type="text" class="form-input" name="signature_text" value="{{ settings.signature_text }}">
-
-
-        <hr style="margin:20px 0; border-color:#333;">
-
-
-        <div class="section-title">הגדרות פייסבוק</div>
-
-        <label class="form-label">Page Access Token</label>
-        <input type="text" class="form-input" name="facebook_page_access_token" value="{{ settings.facebook_page_access_token }}">
-
-        <label class="form-label">Page ID</label>
-        <input type="text" class="form-input" name="facebook_page_id" value="{{ settings.facebook_page_id }}">
-
-
-        <hr style="margin:20px 0; border-color:#333;">
-
-
-        <div class="section-title">סימן מים (תמונה)</div>
-
-        {% if settings.watermark_image %}
-            <div class="badge badge-success">יש סימן מים שמור ✔</div>
-        {% endif %}
-
-        <input type="file" name="watermark_image" class="form-input">
-
-
-        <button class="btn btn-primary w-100 mt-3" type="submit">
-            שמור הגדרות
-        </button>
+        <section class="settings-section">
+            <div class="form-row">
+                <button type="submit" name="action" value="save" class="btn secondary full-width">
+                    שמירת הגדרות
+                </button>
+            </div>
+        </section>
     </form>
-
-
-
-
-    <!-- התחברות לטלגרם -->
-    <div class="card">
-        <div class="section-title">התחברות לטלגרם</div>
-
-        {% if settings.session %}
-            <div class="badge badge-success mb-2">מחובר לטלגרם ✔</div>
-        {% else %}
-            <div class="badge badge-warning mb-2">עדיין לא מחובר לטלגרם</div>
-        {% endif %}
-
-        <!-- שליחת קוד -->
-        <form method="post" class="mb-3">
-
-            <input type="hidden" name="api_id" value="{{ settings.api_id }}">
-            <input type="hidden" name="api_hash" value="{{ settings.api_hash }}">
-            <input type="hidden" name="phone" value="{{ settings.phone }}">
-            <input type="hidden" name="default_channel" value="{{ settings.default_channel }}">
-            <input type="hidden" name="signature_text" value="{{ settings.signature_text }}">
-            <input type="hidden" name="facebook_page_access_token" value="{{ settings.facebook_page_access_token }}">
-            <input type="hidden" name="facebook_page_id" value="{{ settings.facebook_page_id }}">
-            <input type="hidden" name="login_step" value="send_code">
-
-            <button class="btn btn-secondary w-100" type="submit">
-                שליחת קוד לטלגרם
-            </button>
-
-            <div class="small text-muted mt-1">
-                ודא שמילאת למעלה API ID, API Hash ומספר טלפון.
-                הקוד יגיע כהודעה מהחשבון "Telegram".
-            </div>
-        </form>
-
-
-        <!-- אישור התחברות -->
-        <form method="post">
-
-            <input type="hidden" name="api_id" value="{{ settings.api_id }}">
-            <input type="hidden" name="api_hash" value="{{ settings.api_hash }}">
-            <input type="hidden" name="phone" value="{{ settings.phone }}">
-            <input type="hidden" name="default_channel" value="{{ settings.default_channel }}">
-            <input type="hidden" name="signature_text" value="{{ settings.signature_text }}">
-            <input type="hidden" name="facebook_page_access_token" value="{{ settings.facebook_page_access_token }}">
-            <input type="hidden" name="facebook_page_id" value="{{ settings.facebook_page_id }}">
-            <input type="hidden" name="login_step" value="confirm_code">
-
-            <label class="form-label">קוד אימות שהגיע אליך</label>
-            <input type="text" class="form-input" name="code" placeholder="12345">
-
-            <label class="form-label mt-2">סיסמת 2FA (אם יש)</label>
-            <input type="password" class="form-input" name="password" placeholder="אם אין – להשאיר ריק">
-
-            <button class="btn btn-primary w-100 mt-3" type="submit">
-                אישור התחברות
-            </button>
-
-            <div class="small text-muted mt-2">
-                השתמש רק בקוד האחרון שמגיע אליך מהטלגרם.
-            </div>
-        </form>
-    </div>
-
-
-
-
-    <div style="height: 80px;"></div>
-
 </div>
-</body>
-</html>
+
+{% endblock %}
