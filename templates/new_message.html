@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<h1 style="font-size:16px; margin:0 0 10px;">הודעה חדשה</h1>
+<p style="font-size:12px; color:#9ca3af; margin:0 0 10px;">
+    כאן אתה יכול לכתוב טקסט, לצרף מדיה, ולהחיל טשטוש/סימן מים (על תמונות).
+</p>
+
+<form method="post" enctype="multipart/form-data"
+      style="display:flex; flex-direction:column; gap:10px; max-width:500px;">
+
+  <div>
+    <label style="font-size:12px;">טקסט להודעה</label>
+    <textarea name="text" rows="4"
+              style="width:100%; padding:6px; border-radius:6px; border:1px solid #4b5563;
+                     background:#020617; color:#e5e7eb;"></textarea>
+  </div>
+
+  <div>
+    <label style="font-size:12px;">קובץ מדיה (תמונה / וידאו)</label>
+    <input type="file" name="media"
+           style="width:100%; padding:6px; border-radius:6px; border:1px solid #4b5563;
+                  background:#020617; color:#e5e7eb;">
+  </div>
+
+  <div style="display:flex; flex-direction:column; gap:4px; font-size:12px; color:#e5e7eb;">
+    <label>
+      <input type="checkbox" name="apply_blur" value="1">
+      &nbsp;החל טשטוש על המדיה (כרגע תמונות בלבד)
+    </label>
+    <label>
+      <input type="checkbox" name="apply_watermark" value="1">
+      &nbsp;הוסף סימן מים (אם הוגדר בהגדרות)
+    </label>
+  </div>
+
+  <button type="submit"
+          style="width:100%; padding:9px; border-radius:999px; border:none;
+                 background:linear-gradient(135deg,#2563eb,#06b6d4); color:#0b1020;
+                 font-size:14px; font-weight:600;">
+    שליחת הודעה לטלגרם
+  </button>
+
+</form>
+
+{% endblock %}
